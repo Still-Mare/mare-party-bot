@@ -38,7 +38,11 @@ async def init_db():
     if not DATABASE_URL:
         raise RuntimeError("환경변수 DATABASE_URL 이 설정되지 않았어요.")
     _pool = await asyncpg.create_pool(
-        DATABASE_URL, min_size=1, max_size=10, command_timeout=30
+        DATABASE_URL,
+        min_size=1,
+        max_size=10,
+        command_timeout=30,
+        statement_cache_size=0,  # Supabase PgBouncer(transaction mode) 호환 필수
     )
 
 
