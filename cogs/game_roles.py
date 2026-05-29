@@ -12,43 +12,77 @@ import database as db
 
 
 # ───────── 게임 추가 모달 ─────────
-class AddGameModal(ui.Modal, title="게임 추가"):
-    game_name = ui.TextInput(label="게임 이름", placeholder="예: 발로란트", max_length=40)
-    emoji = ui.TextInput(label="이모지", placeholder="예: 🎯", max_length=10)
+class AddGameModal(ui.Modal, title="게임 추가 (여러 개 가능)"):
+    games_input = ui.TextInput(
+        label="이모지 + 게임 이름 (한 줄에 하나씩, 최대 10개)",
+        placeholder="🎯 발로란트\n🔫 오버워치\n🏔️ 에이펙스\n⚔️ 롤",
+        style=discord.TextStyle.paragraph,
+        max_length=500,
+    )
 
     async def on_submit(self, interaction: discord.Interaction):
-        name = str(self.game_name).strip()
-        emoji = str(self.emoji).strip()
         guild = interaction.guild
-
-        existing = await db.get_game(guild.id, name)
-        if existing:
+        lines = [ln.strip() for ln in str(self.games_input).splitlines() if ln.strip()]
+        if not lines:
+            await interaction.response.send_message("입력이 비어있어요.", ephemeral=True)
+            return
+        if len(lines) > 10:
             await interaction.response.send_message(
-                f"이미 '{name}' 게임이 등록되어 있어요.", ephemeral=True
+                "한 번에 최대 10개까지만 추가할 수 있어요. 나눠서 등록해주세요.",
+                ephemeral=True,
             )
             return
 
-        # 같은 이름의 역할이 이미 있으면 재사용, 없으면 생성
-        role = discord.utils.get(guild.roles, name=name)
-        if role is None:
-            try:
-                role = await guild.create_role(
-                    name=name, mentionable=True, reason=f"{interaction.user}가 게임 추가"
-                )
-            except discord.Forbidden:
-                await interaction.response.send_message(
-                    "역할을 만들 권한이 없어요. 봇 역할에 '역할 관리' 권한을 주세요.",
-                    ephemeral=True,
-                )
-                return
+        # 권한 부족 시 첫 시도에서 알 수 있도록 미리 응답 defer
+        await interaction.response.defer(ephemeral=True)
 
-        await db.add_game(guild.id, name, emoji, role.id)
-        await interaction.response.send_message(
-            f"{emoji} '{name}' 게임을 추가했어요! 역할 {role.mention} 이 생성됐어요.",
-            ephemeral=True,
+        added = []
+        skipped = []
+        failed = []
+
+        for line in lines:
+            # 첫 토큰을 이모지로, 나머지를 게임 이름으로 분리
+            parts = line.split(maxsplit=1)
+            if len(parts) < 2:
+                failed.append(f"`{line}` (형식 오류 — 이모지와 이름 모두 필요)")
+                continue
+            emoji, name = parts[0], parts[1].strip()
+
+            existing = await db.get_game(guild.id, name)
+            if existing:
+                skipped.append(f"{emoji} {name} (이미 등록됨)")
+                continue
+
+            # 같은 이름 역할이 이미 있으면 재사용, 없으면 생성
+            role = discord.utils.get(guild.roles, name=name)
+            if role is None:
+                try:
+                    role = await guild.create_role(
+                        name=name, mentionable=True,
+                        reason=f"{interaction.user}가 게임 추가",
+                    )
+                except discord.Forbidden:
+                    failed.append(f"{emoji} {name} (역할 생성 권한 부족)")
+                    continue
+                except discord.HTTPException as e:
+                    failed.append(f"{emoji} {name} (오류: {e})")
+                    continue
+
+            await db.add_game(guild.id, name, emoji, role.id)
+            added.append(f"{emoji} {name}")
+
+        # 결과 메시지
+        parts_msg = []
+        if added:
+            parts_msg.append(f"✅ 추가됨 ({len(added)}개)\n" + "\n".join(f"  • {x}" for x in added))
+        if skipped:
+            parts_msg.append(f"⏭️ 건너뜀\n" + "\n".join(f"  • {x}" for x in skipped))
+        if failed:
+            parts_msg.append(f"❌ 실패\n" + "\n".join(f"  • {x}" for x in failed))
+
+        await interaction.followup.send(
+            "\n\n".join(parts_msg) or "처리할 게임이 없어요.", ephemeral=True
         )
-        # 역할 선택 패널 갱신
-        await refresh_role_panel(interaction)
 
 
 # ───────── 게임 삭제 선택 ─────────

@@ -45,7 +45,13 @@ class PartyBot(commands.Bot):
         await self.load_extension("cogs.leave_notices")
 
         # 영구 View 재등록 (봇 재시작 후에도 버튼이 동작하도록)
-        self.add_view(ControlPanelView())
+        from cogs.control_panel import (
+            RecruitPanelView, RolesPanelView, ActivityPanelView,
+        )
+        self.add_view(RecruitPanelView())
+        self.add_view(RolesPanelView())
+        self.add_view(ActivityPanelView())
+        self.add_view(ControlPanelView())  # 하위 호환 (기존 메시지가 있다면)
         self.add_view(AdminPanelView())
         from cogs.verification import VerifyView
         self.add_view(VerifyView())

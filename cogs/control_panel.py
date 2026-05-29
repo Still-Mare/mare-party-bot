@@ -16,13 +16,13 @@ from cogs.recruitment import GamePickView
 from cogs.voice_stats import build_my_stats_embed, build_ranking_embed
 
 
-class ControlPanelView(ui.View):
-    """영구 컨트롤 패널 View."""
+class RecruitPanelView(ui.View):
+    """패널 1: 파티 모집 (영구)."""
     def __init__(self):
         super().__init__(timeout=None)
 
     @ui.button(label="파티 모집하기", emoji="📢",
-               style=discord.ButtonStyle.success, custom_id="panel:recruit", row=0)
+               style=discord.ButtonStyle.success, custom_id="panel:recruit")
     async def recruit(self, interaction: discord.Interaction, button: ui.Button):
         games = await db.list_games(interaction.guild.id)
         if not games:
@@ -35,8 +35,14 @@ class ControlPanelView(ui.View):
             "모집할 게임을 선택하세요.", view=GamePickView(games), ephemeral=True
         )
 
+
+class RolesPanelView(ui.View):
+    """패널 2: 게임 역할 (영구)."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
     @ui.button(label="게임 역할 받기", emoji="🎮",
-               style=discord.ButtonStyle.primary, custom_id="panel:roles", row=0)
+               style=discord.ButtonStyle.primary, custom_id="panel:roles")
     async def roles(self, interaction: discord.Interaction, button: ui.Button):
         games = await db.list_games(interaction.guild.id)
         if not games:
@@ -51,14 +57,20 @@ class ControlPanelView(ui.View):
             embed=embed, view=RolePanelView(games), ephemeral=True
         )
 
+
+class ActivityPanelView(ui.View):
+    """패널 3: 내 활동 & 커뮤니티 (영구)."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
     @ui.button(label="내 음성시간", emoji="🔊",
-               style=discord.ButtonStyle.secondary, custom_id="panel:mytime", row=1)
+               style=discord.ButtonStyle.secondary, custom_id="panel:mytime")
     async def mytime(self, interaction: discord.Interaction, button: ui.Button):
         embed = await build_my_stats_embed(interaction.guild.id, interaction.user)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @ui.button(label="음성 랭킹", emoji="📊",
-               style=discord.ButtonStyle.secondary, custom_id="panel:ranking", row=1)
+               style=discord.ButtonStyle.secondary, custom_id="panel:ranking")
     async def ranking(self, interaction: discord.Interaction, button: ui.Button):
         embed = await build_ranking_embed(
             interaction.client, interaction.guild, period="week"
@@ -66,13 +78,13 @@ class ControlPanelView(ui.View):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @ui.button(label="익명 건의", emoji="📨",
-               style=discord.ButtonStyle.secondary, custom_id="panel:suggest", row=2)
+               style=discord.ButtonStyle.secondary, custom_id="panel:suggest")
     async def suggest(self, interaction: discord.Interaction, button: ui.Button):
         from cogs.suggestions import SuggestionModal
         await interaction.response.send_modal(SuggestionModal())
 
     @ui.button(label="잠수 신고", emoji="🕊️",
-               style=discord.ButtonStyle.secondary, custom_id="panel:leave", row=2)
+               style=discord.ButtonStyle.secondary, custom_id="panel:leave")
     async def leave_notice(self, interaction: discord.Interaction, button: ui.Button):
         from cogs.leave_notices import LeaveStartView
         embed = discord.Embed(
@@ -87,6 +99,12 @@ class ControlPanelView(ui.View):
         await interaction.response.send_message(
             embed=embed, view=LeaveStartView(), ephemeral=True
         )
+
+
+# 하위 호환용 (예전 영구 View 등록 코드가 이 이름 참조)
+class ControlPanelView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
 
 
 class AdminPanelView(ui.View):
@@ -463,17 +481,27 @@ async def can_manage_panel(interaction: discord.Interaction) -> bool:
     return False
 
 
-def build_user_panel_embed() -> discord.Embed:
+def build_recruit_panel_embed() -> discord.Embed:
     return discord.Embed(
-        title="🎮 파티 봇 컨트롤 패널",
-        description=(
-            "아래 버튼으로 모든 기능을 사용할 수 있어요.\n\n"
-            "📢 **파티 모집하기** — 게임을 골라 모집글을 올려요\n"
-            "🎮 **게임 역할 받기** — 모집 알림 받을 게임을 선택해요\n"
-            "🔊 **내 음성시간** — 내 음성채널 이용시간을 봐요\n"
-            "📊 **음성 랭킹** — 이번 주 음성 랭킹을 봐요"
-        ),
+        title="📢 파티 모집",
+        description="버튼을 눌러 파티원을 모집해요.",
+        color=0x248046,
+    )
+
+
+def build_roles_panel_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🎮 게임 역할",
+        description="관심 있는 게임의 모집 알림을 받아요.",
         color=0x5865F2,
+    )
+
+
+def build_activity_panel_embed() -> discord.Embed:
+    return discord.Embed(
+        title="📊 내 활동 & 커뮤니티",
+        description="음성 시간 확인, 잠수 신고, 익명 건의를 보낼 수 있어요.",
+        color=0x4E5058,
     )
 
 
@@ -492,15 +520,17 @@ class ControlPanel(commands.Cog):
     @app_commands.command(name="패널", description="이 채널에 패널을 설치합니다 (관리자/지정 역할만)")
     @app_commands.describe(종류="설치할 패널 종류를 고르세요")
     @app_commands.choices(종류=[
-        app_commands.Choice(name="유저용 (모집·역할·음성)", value="user"),
-        app_commands.Choice(name="관리자용 (설정·활동검토)", value="admin"),
+        app_commands.Choice(name="📢 파티 모집", value="recruit"),
+        app_commands.Choice(name="🎮 게임 역할", value="roles"),
+        app_commands.Choice(name="📊 내 활동 & 커뮤니티", value="activity"),
+        app_commands.Choice(name="🛠️ 관리자", value="admin"),
     ])
     async def setup_panel(
         self,
         interaction: discord.Interaction,
-        종류: app_commands.Choice[str] = None,
+        종류: app_commands.Choice[str],
     ):
-        # 권한 게이트: 관리자 또는 지정 역할만
+        # 권한 게이트
         if not await can_manage_panel(interaction):
             await interaction.response.send_message(
                 "이 명령어는 서버 관리자 또는 지정된 패널 관리 역할만 쓸 수 있어요.",
@@ -508,23 +538,32 @@ class ControlPanel(commands.Cog):
             )
             return
 
-        kind = 종류.value if 종류 else "user"  # 기본값: 유저용
+        kind = 종류.value
 
-        if kind == "admin":
+        if kind == "recruit":
+            await interaction.channel.send(
+                embed=build_recruit_panel_embed(), view=RecruitPanelView()
+            )
+            msg = "📢 파티 모집 패널을 설치했어요!"
+        elif kind == "roles":
+            await interaction.channel.send(
+                embed=build_roles_panel_embed(), view=RolesPanelView()
+            )
+            msg = "🎮 게임 역할 패널을 설치했어요!"
+        elif kind == "activity":
+            await interaction.channel.send(
+                embed=build_activity_panel_embed(), view=ActivityPanelView()
+            )
+            msg = "📊 내 활동 & 커뮤니티 패널을 설치했어요!"
+        elif kind == "admin":
             await interaction.channel.send(
                 embed=build_admin_panel_embed(), view=AdminPanelView()
             )
-            await interaction.response.send_message(
-                "관리자 패널을 설치했어요! (이 채널은 관리자만 보이게 권한 설정을 권장해요)",
-                ephemeral=True,
-            )
+            msg = "🛠️ 관리자 패널을 설치했어요! (이 채널은 관리자만 보이게 권한 설정을 권장해요)"
         else:
-            await interaction.channel.send(
-                embed=build_user_panel_embed(), view=ControlPanelView()
-            )
-            await interaction.response.send_message(
-                "유저용 패널을 설치했어요!", ephemeral=True
-            )
+            msg = "알 수 없는 패널 종류예요."
+
+        await interaction.response.send_message(msg, ephemeral=True)
 
 
 async def setup(bot):
