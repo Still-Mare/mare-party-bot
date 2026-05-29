@@ -63,12 +63,11 @@ class PartyBot(commands.Bot):
         # 기존 모집글 / 역할 버튼 복원
         await self._restore_persistent_views()
 
-        # 슬래시 명령어 동기화 (SYNC_COMMANDS=true 일 때만)
+        # 글로벌 슬래시 명령어 등록 (항상 실행 — 봇 내부 트리 구성용)
+        # 실제 Discord 전파는 on_ready에서 길드별로 처리한다.
         if SYNC_COMMANDS:
             await self.tree.sync()
-            log.info("슬래시 명령어 동기화 완료")
-        else:
-            log.info("슬래시 명령어 동기화 스킵 (명령어 변경 시 SYNC_COMMANDS=true 로 1회 배포)")
+            log.info("글로벌 슬래시 명령어 동기화 완료")
         log.info("setup_hook 완료")
 
     async def _restore_persistent_views(self):
@@ -81,6 +80,15 @@ class PartyBot(commands.Bot):
     async def on_ready(self):
         log.info(f"로그인됨: {self.user} (ID: {self.user.id})")
         log.info(f"서버 {len(self.guilds)}개에 연결됨")
+
+        if SYNC_COMMANDS:
+            # 길드별 즉시 동기화.
+            # - 글로벌 sync는 Discord 전파에 최대 1시간 걸린다.
+            # - 길드 sync는 즉시 반영되며, 구버전 길드 전용 명령어(stale)도 교체된다.
+            for guild in self.guilds:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+            log.info(f"길드별 슬래시 명령어 즉시 동기화 완료 ({len(self.guilds)}개 길드)")
 
     async def close(self):
         """봇 종료 시 DB 커넥션 풀을 정리한다."""
