@@ -211,6 +211,7 @@ class AdminPanelView(ui.View):
         await interaction.response.defer(ephemeral=True)
 
         from cogs.activity_review import run_review, build_review_embed, KickApprovalView
+        from datetime import datetime, timezone
         result = await run_review(interaction.client, interaction.guild)
         embed = build_review_embed(result, interaction.guild)
         channel = interaction.guild.get_channel(settings["review_log_channel"])
@@ -220,6 +221,7 @@ class AdminPanelView(ui.View):
             view = KickApprovalView(result["kick_candidates"])
         await channel.send(embed=embed, view=view)
         await db.reset_week(interaction.guild.id)
+        await db.set_last_reviewed_at(interaction.guild.id, datetime.now(timezone.utc))
         await interaction.followup.send(
             f"활동검토를 실행했어요. 결과는 <#{settings['review_log_channel']}> 에 있어요.",
             ephemeral=True,

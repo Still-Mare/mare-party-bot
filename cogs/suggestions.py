@@ -57,7 +57,7 @@ class SuggestionModal(ui.Modal, title="익명 건의 작성"):
         )
         embed.set_footer(text=f"건의 #{suggestion_id} · 서버 주인만 작성자를 확인할 수 있어요")
 
-        view = SuggestionAdminView(suggestion_id)
+        view = SuggestionAdminView()
         msg = await channel.send(embed=embed, view=view)
         await db.set_suggestion_public_msg(suggestion_id, msg.id)
 
@@ -69,40 +69,38 @@ class SuggestionModal(ui.Modal, title="익명 건의 작성"):
 
 
 class SuggestionAdminView(ui.View):
-    """건의글에 붙는 영구 View. 서버 주인만 작성자 확인 가능."""
-    def __init__(self, suggestion_id: int = 0):
+    """
+    건의글에 붙는 영구 View. 서버 주인만 작성자 확인 가능.
+
+    custom_id를 단일 고정값 "suggestion_reveal"로 유지하여
+    bot.add_view(SuggestionAdminView()) 한 번으로 모든 건의 버튼을 처리한다.
+    건의 ID는 interaction.message.id → DB 조회로 결정한다.
+    """
+    def __init__(self):
         super().__init__(timeout=None)
-        # custom_id에 ID를 박아 봇 재시작 후에도 동작
-        if suggestion_id:
-            self.reveal_btn.custom_id = f"suggestion_reveal:{suggestion_id}"
-        self.suggestion_id = suggestion_id
 
     @ui.button(label="작성자 확인", emoji="🔍",
-               style=discord.ButtonStyle.secondary, custom_id="suggestion_reveal:0")
+               style=discord.ButtonStyle.secondary, custom_id="suggestion_reveal")
     async def reveal_btn(self, interaction: discord.Interaction, button: ui.Button):
-        # 커스텀 ID에서 ID 파싱 (재시작 후 self.suggestion_id가 0일 수 있음)
-        sid = self.suggestion_id
-        if not sid and button.custom_id and ":" in button.custom_id:
-            try:
-                sid = int(button.custom_id.split(":", 1)[1])
-            except ValueError:
-                sid = 0
-        if not sid:
-            await interaction.response.send_message("건의 ID를 찾을 수 없어요.", ephemeral=True)
-            return
-
-        # 서버 주인(owner) 만 가능
+        # 서버 주인(owner)만 가능
         if interaction.user.id != interaction.guild.owner_id:
             await interaction.response.send_message(
                 "서버 주인만 작성자를 확인할 수 있어요.", ephemeral=True
             )
             return
 
+        # 메시지 ID로 건의 조회 — 봇 재시작 후에도 동작
+        sid = await db.get_suggestion_by_message(interaction.message.id)
+        if not sid:
+            await interaction.response.send_message(
+                "건의를 찾을 수 없어요. (DB에 메시지 ID가 기록되지 않은 구버전 건의일 수 있어요)",
+                ephemeral=True,
+            )
+            return
+
         author_id = await db.get_suggestion_author(sid)
         if not author_id:
-            await interaction.response.send_message(
-                "건의를 찾을 수 없어요.", ephemeral=True
-            )
+            await interaction.response.send_message("건의를 찾을 수 없어요.", ephemeral=True)
             return
         member = interaction.guild.get_member(author_id)
         name = f"{member.display_name} ({member.mention})" if member else f"<@{author_id}> (서버에 없음)"

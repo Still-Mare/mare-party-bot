@@ -2,20 +2,21 @@
 매주 음성 활동량을 검토하는 기능.
 
 흐름:
-1. 14일마다 자동 실행 (또는 관리자가 수동 실행)
-2. 면제 역할 보유자 / 가입 1주 미만 신규원은 제외
+1. 매주 월요일(UTC) 자동 실행 — 또는 관리자 패널에서 수동 실행
+2. 면제 역할 보유자 / 가입 1주 미만 신규원 / 잠수 신고 승인자는 제외
 3. 기준 시간(min_seconds) 미달자:
-   - strike +1
-   - DM 경고 발송 (실패 시 로그)
-   - 1회차: 경고만
-   - 3회차 이상: '강퇴 후보'로 분류
+   - strike +1 / DM 경고 발송 (실패 시 로그 채널에 기록)
+   - 1·2회차: 정중한 안내 DM
+   - STRIKE_KICK_THRESHOLD(3)회 이상: '강퇴 후보'로 분류
 4. 강퇴 후보는 관리자 채널에 리스트로 게시
    - auto_kick_enabled=1 이어도 실제 kick은 관리자가 버튼 승인해야 실행
    - 기준 충족자는 strike 초기화
 
 * 안전장치: 봇은 절대 자동으로 kick하지 않는다. 항상 관리자 승인을 거친다.
+* 멱등성: last_reviewed_at을 DB에 기록해 재배포 시 이중 실행을 방지한다.
 """
 
+import logging
 from datetime import datetime, timezone, timedelta
 
 import discord
@@ -25,8 +26,11 @@ from discord import ui
 import database as db
 from cogs.voice_stats import fmt_duration
 
-REVIEW_INTERVAL_DAYS = 7
+log = logging.getLogger("party-bot")
+
 NEW_MEMBER_GRACE_DAYS = 7
+STRIKE_KICK_THRESHOLD = 3   # 이 횟수 이상 미달 시 강퇴 후보로 분류
+# review_loop는 weekday()==0 체크로 매주 월요일 1회 실행 (24h 루프 + 요일 필터)
 
 
 def _is_exempt(member: discord.Member, exempt_role_id, now) -> bool:
@@ -78,8 +82,8 @@ async def run_review(bot, guild: discord.Guild) -> dict:
             passed += 1
         else:
             strikes = await db.add_strike(guild.id, member.id)
-            if strikes >= 3:
-                # 3회째: 강퇴 후보 + 최종 안내 DM
+            if strikes >= STRIKE_KICK_THRESHOLD:
+                # STRIKE_KICK_THRESHOLD 회째: 강퇴 후보 + 최종 안내 DM
                 kick_candidates.append((member, secs, strikes))
                 await _send_final_dm(member, guild, secs, min_seconds, settings)
             else:
@@ -124,8 +128,9 @@ async def _send_warning_dm(member, guild, secs, min_seconds, strikes, settings):
         f"(현재 누적 안내 {strikes}회)\n\n"
         f"강제성이 있는 것은 아니며, 편하실 때 음성채널에서 함께해 주시면 됩니다. "
         f"다만 안내가 누적될 경우 부득이하게 멤버 정리 대상에 포함될 수 있는 점 양해 부탁드립니다.\n\n"
-        f"학업·업무·건강 등 **불가피한 사정으로 참여가 어려우신 경우, 운영진에게 알려주시면 "
-        f"예외로 처리해 드립니다.** 편하게 말씀해 주세요. 감사합니다."
+        f"학업·업무·건강 등 **불가피한 사정으로 참여가 어려우신 경우**, 서버 패널의 "
+        f"**'잠수 신고' 버튼**으로 기간을 신고하시거나 운영진에게 직접 알려주시면 예외로 처리해 드립니다. "
+        f"편하게 말씀해 주세요. 감사합니다."
     )
     return await _dm_or_log(member, guild, settings, msg)
 
@@ -284,6 +289,17 @@ class ActivityReview(commands.Cog):
         if not channel:
             return
 
+        # 멱등성 체크: 23시간 이내 이미 실행됐으면 스킵 (재배포 시 이중 실행 방지)
+        now = datetime.now(timezone.utc)
+        last_reviewed = await db.get_last_reviewed_at(guild.id)
+        if last_reviewed is not None:
+            elapsed = (now - last_reviewed).total_seconds()
+            if elapsed < 23 * 3600:
+                log.info(
+                    f"[{guild.name}] 활동검토 스킵 — 마지막 실행 후 {elapsed/3600:.1f}h 경과 (23h 미만)"
+                )
+                return
+
         result = await run_review(self.bot, guild)
         embed = build_review_embed(result, guild)
 
@@ -292,8 +308,10 @@ class ActivityReview(commands.Cog):
         if result["kick_candidates"] and settings["auto_kick_enabled"]:
             view = KickApprovalView(result["kick_candidates"])
         await channel.send(embed=embed, view=view)
-        # 주간 시간 초기화 (다음 검토 주기 시작)
+        # 주간 시간 초기화 + 실행 시각 기록
         await db.reset_week(guild.id)
+        await db.set_last_reviewed_at(guild.id, now)
+        log.info(f"[{guild.name}] 활동검토 완료 — 통과 {result['passed']}명, 경고 {len(result['warned'])}명, 후보 {len(result['kick_candidates'])}명")
 
 
 async def setup(bot):

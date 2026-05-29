@@ -14,12 +14,14 @@ from discord.ext import commands
 import database as db
 from cogs.control_panel import ControlPanelView, AdminPanelView
 from cogs.recruitment import RecruitView
-from cogs.game_roles import RoleToggleButton
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("party-bot")
 
 TOKEN = os.environ.get("DISCORD_TOKEN")
+# Railway 재배포마다 sync하면 일일 2회 글로벌 레이트 리밋에 걸릴 수 있다.
+# 명령어 변경 시에만 SYNC_COMMANDS=true 환경변수를 설정하고 1회 배포 후 다시 false로.
+SYNC_COMMANDS = os.environ.get("SYNC_COMMANDS", "false").lower() == "true"
 
 intents = discord.Intents.default()
 intents.members = True        # 멤버 정보 (역할 부여, 닉네임)
@@ -61,8 +63,12 @@ class PartyBot(commands.Bot):
         # 기존 모집글 / 역할 버튼 복원
         await self._restore_persistent_views()
 
-        # 슬래시 명령어 동기화
-        await self.tree.sync()
+        # 슬래시 명령어 동기화 (SYNC_COMMANDS=true 일 때만)
+        if SYNC_COMMANDS:
+            await self.tree.sync()
+            log.info("슬래시 명령어 동기화 완료")
+        else:
+            log.info("슬래시 명령어 동기화 스킵 (명령어 변경 시 SYNC_COMMANDS=true 로 1회 배포)")
         log.info("setup_hook 완료")
 
     async def _restore_persistent_views(self):
@@ -75,6 +81,11 @@ class PartyBot(commands.Bot):
     async def on_ready(self):
         log.info(f"로그인됨: {self.user} (ID: {self.user.id})")
         log.info(f"서버 {len(self.guilds)}개에 연결됨")
+
+    async def close(self):
+        """봇 종료 시 DB 커넥션 풀을 정리한다."""
+        await db.close_db()
+        await super().close()
 
 
 def main():

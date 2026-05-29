@@ -130,15 +130,33 @@ class RoleToggleButton(ui.Button):
     async def callback(self, interaction: discord.Interaction):
         role = interaction.guild.get_role(self.role_id)
         if role is None:
-            await interaction.response.send_message("역할을 찾을 수 없어요.", ephemeral=True)
+            await interaction.response.send_message(
+                "역할을 찾을 수 없어요. 관리자가 게임을 다시 등록해야 할 수 있어요.",
+                ephemeral=True,
+            )
             return
         member = interaction.user
-        if role in member.roles:
-            await member.remove_roles(role)
-            await interaction.response.send_message(f"{role.name} 역할을 뺐어요.", ephemeral=True)
-        else:
-            await member.add_roles(role)
-            await interaction.response.send_message(f"{role.name} 역할을 받았어요!", ephemeral=True)
+        try:
+            if role in member.roles:
+                await member.remove_roles(role)
+                await interaction.response.send_message(
+                    f"{role.name} 역할을 뺐어요.", ephemeral=True
+                )
+            else:
+                await member.add_roles(role)
+                await interaction.response.send_message(
+                    f"{role.name} 역할을 받았어요!", ephemeral=True
+                )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "역할을 변경할 권한이 없어요. "
+                "봇 역할이 해당 게임 역할보다 위에 있는지 관리자에게 확인 요청해주세요.",
+                ephemeral=True,
+            )
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                f"역할 변경 중 오류가 발생했어요: {e}", ephemeral=True
+            )
 
 
 class RolePanelView(ui.View):

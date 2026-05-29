@@ -171,7 +171,7 @@ async def _submit_leave(interaction: discord.Interaction, until: date, reason):
 class LeaveReviewView(ui.View):
     """pending 신고 목록을 보여주는 패널."""
     def __init__(self, notices, guild):
-        super().__init__(timeout=300)
+        super().__init__(timeout=None)
         if not notices:
             return
         # 드롭다운: 최대 25개
@@ -205,6 +205,8 @@ class LeaveActionSelect(ui.Select):
                 "관리자만 사용할 수 있어요.", ephemeral=True
             )
             return
+
+        await interaction.response.defer(ephemeral=True)
 
         processed = []
         for nid_str in self.values:
@@ -240,7 +242,7 @@ class LeaveActionSelect(ui.Select):
                     pass
             processed.append(f"#{nid} {verb}")
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"처리 완료: {', '.join(processed) if processed else '없음'}",
             ephemeral=True,
         )

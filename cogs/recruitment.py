@@ -5,25 +5,43 @@
 - 참가자 명단 실시간 갱신
 """
 
+import asyncio
+import logging
+
 import discord
 from discord.ext import commands
 from discord import ui
 
 import database as db
 
+log = logging.getLogger("party-bot")
 
-def build_recruit_embed(recruit: dict, participant_members: list, host_member) -> discord.Embed:
-    """모집글 임베드를 만든다. 참가자 명단 포함."""
+# 모집별 임시 역할 생성 잠금 — 동시 참가 시에도 역할 1개만 생성되게 보장 (단일 프로세스용)
+_temp_role_locks: dict[int, asyncio.Lock] = {}
+
+
+def build_recruit_embed(
+    recruit: dict,
+    participant_members: list,
+    host_member,
+    total_count: int | None = None,
+) -> discord.Embed:
+    """
+    모집글 임베드를 만든다. 참가자 명단 포함.
+    total_count: DB 기준 실제 참가자 수 (서버를 떠난 멤버 포함).
+                 None이면 participant_members 길이를 사용한다.
+    """
     is_closed = recruit["status"] == "closed"
     color = 0x4E5058 if is_closed else 0x248046
     title = ("🔒 [마감] " if is_closed else "📢 ") + f"{recruit['game_name']} 파티 모집"
 
+    count = total_count if total_count is not None else len(participant_members)
     embed = discord.Embed(title=title, color=color)
     embed.add_field(name="🎮 게임", value=recruit["game_name"], inline=True)
     embed.add_field(name="🕐 시간", value=recruit["play_time"], inline=True)
     embed.add_field(
         name="👥 인원",
-        value=f"{len(participant_members)}/{recruit['max_players']}명",
+        value=f"{count}/{recruit['max_players']}명",
         inline=True,
     )
     if recruit["note"]:
@@ -45,23 +63,36 @@ def build_recruit_embed(recruit: dict, participant_members: list, host_member) -
 
 
 async def ensure_temp_role(guild, recruit):
-    """모집의 임시 역할을 반환. 없으면 생성해서 DB에 저장."""
-    import discord as _d
-    if recruit["temp_role_id"]:
-        role = guild.get_role(recruit["temp_role_id"])
-        if role:
-            return role
-    # 생성
-    try:
-        role = await guild.create_role(
-            name=f"파티-{recruit['game_name']}-{recruit['id']}",
-            mentionable=True,
-            reason=f"모집 #{recruit['id']} 임시 역할",
-        )
-    except _d.Forbidden:
-        return None
-    await db.set_recruit_temp_role(recruit["id"], role.id)
-    return role
+    """
+    모집의 임시 역할을 반환. 없으면 생성해서 DB에 저장.
+    asyncio.Lock으로 동시 참가 시 고아 역할 생성을 방지한다.
+    """
+    rid = recruit["id"]
+    if rid not in _temp_role_locks:
+        _temp_role_locks[rid] = asyncio.Lock()
+
+    async with _temp_role_locks[rid]:
+        # 잠금 후 DB를 다시 읽어 최신 상태 확인
+        fresh = await db.get_recruit(rid)
+        if fresh and fresh["temp_role_id"]:
+            role = guild.get_role(fresh["temp_role_id"])
+            if role:
+                return role
+        # 새 역할 생성
+        try:
+            role = await guild.create_role(
+                name=f"파티-{recruit['game_name']}-{rid}",
+                mentionable=True,
+                reason=f"모집 #{rid} 임시 역할",
+            )
+        except discord.Forbidden:
+            log.warning(f"임시 역할 생성 실패 (권한 부족) — 모집 #{rid}")
+            return None
+        except discord.HTTPException as e:
+            log.warning(f"임시 역할 생성 실패 — 모집 #{rid}: {e}")
+            return None
+        await db.set_recruit_temp_role(rid, role.id)
+        return role
 
 
 async def grant_temp_role(guild, recruit, member):
@@ -116,14 +147,10 @@ async def refresh_recruit_message(bot, recruit_id: int):
         return
 
     user_ids = await db.list_participants(recruit_id)
-    members = []
-    for uid in user_ids:
-        m = guild.get_member(uid)
-        if m:
-            members.append(m)
+    members = [m for uid in user_ids if (m := guild.get_member(uid))]
     host = guild.get_member(recruit["host_id"])
 
-    embed = build_recruit_embed(recruit, members, host)
+    embed = build_recruit_embed(recruit, members, host, total_count=len(user_ids))
     view = None if recruit["status"] == "closed" else RecruitView(recruit_id)
     await msg.edit(embed=embed, view=view)
 
@@ -221,20 +248,25 @@ class RecruitView(ui.View):
 
     @ui.button(label="참가", emoji="✋", style=discord.ButtonStyle.success, row=0)
     async def join_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        result = await db.try_join_recruit(self.recruit_id, interaction.user.id)
+        if result == "closed":
+            await interaction.followup.send("마감된 모집이에요.", ephemeral=True)
+            return
+        if result == "full":
+            await interaction.followup.send("이미 인원이 다 찼어요.", ephemeral=True)
+            return
+        if result == "already_joined":
+            await interaction.followup.send("이미 참가 중이에요.", ephemeral=True)
+            return
+
+        # 참가 성공 — 역할 부여 (recruit 재조회로 최신 temp_role_id 반영)
         recruit = await db.get_recruit(self.recruit_id)
-        if not recruit or recruit["status"] != "open":
-            await interaction.response.send_message("마감된 모집이에요.", ephemeral=True)
-            return
-        current = await db.list_participants(self.recruit_id)
-        if len(current) >= recruit["max_players"]:
-            await interaction.response.send_message("이미 인원이 다 찼어요.", ephemeral=True)
-            return
-        added = await db.add_participant(self.recruit_id, interaction.user.id)
-        if not added:
-            await interaction.response.send_message("이미 참가 중이에요.", ephemeral=True)
-            return
-        await grant_temp_role(interaction.guild, recruit, interaction.user)
-        await interaction.response.send_message("참가했어요!", ephemeral=True)
+        if recruit:
+            await grant_temp_role(interaction.guild, recruit, interaction.user)
+
+        await interaction.followup.send("참가했어요!", ephemeral=True)
         await refresh_recruit_message(interaction.client, self.recruit_id)
 
     @ui.button(label="참가 취소", emoji="❌", style=discord.ButtonStyle.secondary, row=0)
@@ -258,16 +290,18 @@ class RecruitView(ui.View):
 
     @ui.button(label="음성방 열기", emoji="🔊", style=discord.ButtonStyle.primary, row=1)
     async def voice_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
         recruit = await db.get_recruit(self.recruit_id)
         if not recruit or recruit["status"] != "open":
-            await interaction.response.send_message("마감된 모집이에요.", ephemeral=True)
+            await interaction.followup.send("마감된 모집이에요.", ephemeral=True)
             return
 
         # 이미 음성방이 있으면 안내
         if recruit["voice_channel_id"]:
             existing = interaction.guild.get_channel(recruit["voice_channel_id"])
             if existing:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     f"이미 음성방이 있어요: {existing.mention}", ephemeral=True
                 )
                 return
@@ -299,8 +333,13 @@ class RecruitView(ui.View):
                 reason=f"모집 #{self.recruit_id} 음성방",
             )
         except discord.Forbidden:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "음성방을 만들 권한이 없어요. 봇에 '채널 관리' 권한을 주세요.", ephemeral=True
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"음성방 생성 중 오류가 발생했어요: {e}", ephemeral=True
             )
             return
 
@@ -313,7 +352,7 @@ class RecruitView(ui.View):
             except discord.HTTPException:
                 pass
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f"음성방을 만들었어요: {vc.mention}\n참가자 전원이 나가면 자동으로 닫혀요.",
             ephemeral=True,
         )
@@ -321,19 +360,29 @@ class RecruitView(ui.View):
 
     @ui.button(label="모집 마감", emoji="🔒", style=discord.ButtonStyle.danger, row=1)
     async def close_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
         recruit = await db.get_recruit(self.recruit_id)
         if not recruit:
+            await interaction.followup.send("모집 정보를 찾을 수 없어요.", ephemeral=True)
             return
-        # 모집자 또는 관리자만 마감 가능
-        is_admin = interaction.user.guild_permissions.manage_messages
+
+        # 모집자이거나 서버 관리자 / 패널 관리 역할 보유자만 마감 가능
+        settings = await db.get_settings(interaction.guild.id)
+        pmr = settings.get("panel_manager_role")
+        is_admin = (
+            interaction.user.guild_permissions.manage_guild
+            or (pmr and any(r.id == pmr for r in interaction.user.roles))
+        )
         if interaction.user.id != recruit["host_id"] and not is_admin:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "모집자나 관리자만 마감할 수 있어요.", ephemeral=True
             )
             return
+
         await db.close_recruit(self.recruit_id)
         await delete_temp_role(interaction.guild, recruit)
-        await interaction.response.send_message("모집을 마감했어요.", ephemeral=True)
+        await interaction.followup.send("모집을 마감했어요.", ephemeral=True)
         await refresh_recruit_message(interaction.client, self.recruit_id)
 
 
