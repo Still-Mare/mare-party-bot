@@ -126,11 +126,12 @@ class AdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         games = await db.list_games(interaction.guild.id)
         if not games:
-            await interaction.response.send_message("등록된 게임이 없어요.", ephemeral=True)
+            await interaction.followup.send("등록된 게임이 없어요.", ephemeral=True)
             return
-        await interaction.response.send_message(
+        await interaction.followup.send(
             "삭제할 게임을 선택하세요.", view=RemoveGameView(games), ephemeral=True
         )
 
@@ -140,8 +141,9 @@ class AdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         await db.reset_week(interaction.guild.id)
-        await interaction.response.send_message("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
+        await interaction.followup.send("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
 
     @ui.button(label="음성방 카테고리 지정", emoji="📁",
                style=discord.ButtonStyle.secondary, custom_id="admin:setcategory", row=2)
@@ -169,12 +171,32 @@ class AdminPanelView(ui.View):
             view=ArchiveSelectView(), ephemeral=True,
         )
 
+    @ui.button(label="모집글 채널 지정", emoji="📌",
+               style=discord.ButtonStyle.primary, custom_id="admin:setrecruitchannel", row=2)
+    async def set_recruit_channel(self, interaction: discord.Interaction, button: ui.Button):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        settings = await db.get_settings(interaction.guild.id)
+        current = (
+            f"현재: <#{settings['recruit_post_channel_id']}>\n\n"
+            if settings.get("recruit_post_channel_id")
+            else "현재: 미설정 (파티 모집 버튼을 누른 채널에 게시됨)\n\n"
+        )
+        await interaction.followup.send(
+            f"{current}모집글이 항상 게시될 전용 채널을 선택하세요.\n"
+            "설정하면 파티 모집 버튼이 어느 채널에 있든 모집글은 이 채널에 올라가요.",
+            view=RecruitChannelSelectView(), ephemeral=True,
+        )
+
     @ui.button(label="활동검토 설정", emoji="📋",
                style=discord.ButtonStyle.secondary, custom_id="admin:reviewsettings", row=3)
     async def review_settings(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         settings = await db.get_settings(interaction.guild.id)
         from cogs.voice_stats import fmt_duration
         log_ch = f"<#{settings['review_log_channel']}>" if settings["review_log_channel"] else "미설정"
@@ -192,7 +214,7 @@ class AdminPanelView(ui.View):
             ),
             color=0xBA7517,
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embed, view=ReviewSettingsView(), ephemeral=True
         )
 
@@ -202,13 +224,13 @@ class AdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         settings = await db.get_settings(interaction.guild.id)
         if not settings["review_log_channel"]:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "먼저 '활동검토 설정'에서 로그 채널을 지정해주세요.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
 
         from cogs.activity_review import run_review, build_review_embed, KickApprovalView
         from datetime import datetime, timezone
@@ -233,11 +255,10 @@ class AdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
+        await interaction.response.defer(ephemeral=True)
         notices = await db.list_pending_leave_notices(interaction.guild.id)
         if not notices:
-            await interaction.response.send_message(
-                "대기 중인 잠수 신고가 없어요.", ephemeral=True
-            )
+            await interaction.followup.send("대기 중인 잠수 신고가 없어요.", ephemeral=True)
             return
 
         lines = []
@@ -258,9 +279,7 @@ class AdminPanelView(ui.View):
 
         from cogs.leave_notices import LeaveReviewView
         view = LeaveReviewView(notices, interaction.guild)
-        await interaction.response.send_message(
-            embed=embed, view=view, ephemeral=True
-        )
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @ui.button(label="패널 관리 역할 지정", emoji="🔑",
                style=discord.ButtonStyle.secondary, custom_id="admin:panelrole", row=4)
@@ -406,6 +425,29 @@ class ArchiveChannelSelect(ui.ChannelSelect):
         await db.set_archive_channel(interaction.guild.id, channel.id)
         await interaction.response.send_message(
             f"아카이브 채널을 <#{channel.id}>(으)로 설정했어요.", ephemeral=True
+        )
+
+
+class RecruitChannelSelectView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+        self.add_item(RecruitChannelSelect())
+
+
+class RecruitChannelSelect(ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="모집글 전용 채널 선택",
+            channel_types=[discord.ChannelType.text],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        channel = self.values[0]
+        await db.set_recruit_post_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(
+            f"모집글 전용 채널을 {channel.mention}(으)로 설정했어요.\n"
+            f"이제 '파티 모집하기' 버튼을 어디서 누르든 모집글은 이 채널에 게시돼요.",
+            ephemeral=True,
         )
 
 

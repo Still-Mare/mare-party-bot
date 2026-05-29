@@ -182,9 +182,20 @@ class RecruitModal(ui.Modal, title="파티 모집글 작성"):
             )
             return
 
+        # 모집글 전용 채널 확인
+        settings = await db.get_settings(interaction.guild.id)
+        post_channel_id = settings.get("recruit_post_channel_id")
+        post_channel = (
+            interaction.guild.get_channel(post_channel_id)
+            if post_channel_id
+            else None
+        )
+        # 전용 채널이 설정됐으면 그곳에, 없으면 현재 채널에 게시
+        target_channel = post_channel or interaction.channel
+
         recruit_id = await db.create_recruit(
             interaction.guild.id,
-            interaction.channel.id,
+            target_channel.id,       # 실제 게시 채널 저장
             interaction.user.id,
             self.game_name,
             str(self.play_time).strip(),
@@ -205,11 +216,21 @@ class RecruitModal(ui.Modal, title="파티 모집글 작성"):
             if role:
                 mention = role.mention
 
-        await interaction.response.send_message(
-            content=mention or None, embed=embed, view=view
-        )
-        sent = await interaction.original_response()
-        await db.set_recruit_message(recruit_id, sent.id)
+        if post_channel and post_channel != interaction.channel:
+            # 전용 채널에 게시 → 모달 응답은 ephemeral 안내로 처리
+            await interaction.response.defer(ephemeral=True)
+            sent = await post_channel.send(content=mention or None, embed=embed, view=view)
+            await db.set_recruit_message(recruit_id, sent.id)
+            await interaction.followup.send(
+                f"모집글이 {post_channel.mention}에 게시됐어요!", ephemeral=True
+            )
+        else:
+            # 현재 채널에 게시 (기존 동작)
+            await interaction.response.send_message(
+                content=mention or None, embed=embed, view=view
+            )
+            sent = await interaction.original_response()
+            await db.set_recruit_message(recruit_id, sent.id)
 
         # 모집자에게 임시 역할 부여
         recruit = await db.get_recruit(recruit_id)

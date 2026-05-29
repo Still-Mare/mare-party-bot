@@ -18,6 +18,7 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "voice_category_id", "archive_channel_id", "review_log_channel",
     "exempt_role_id", "min_seconds", "auto_kick_enabled",
     "panel_manager_role", "verified_role_id", "last_reviewed_at",
+    "recruit_post_channel_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
@@ -319,7 +320,7 @@ async def get_settings(guild_id):
         r = await con.fetchrow(
             """SELECT voice_category_id, archive_channel_id, review_log_channel,
                       exempt_role_id, min_seconds, auto_kick_enabled, panel_manager_role,
-                      verified_role_id
+                      verified_role_id, recruit_post_channel_id
                FROM guild_settings WHERE guild_id = $1""",
             guild_id,
         )
@@ -329,6 +330,7 @@ async def get_settings(guild_id):
             "review_log_channel": None, "exempt_role_id": None,
             "min_seconds": 10800, "auto_kick_enabled": 0,
             "panel_manager_role": None, "verified_role_id": None,
+            "recruit_post_channel_id": None,
         }
     return {
         "voice_category_id": r["voice_category_id"],
@@ -339,6 +341,7 @@ async def get_settings(guild_id):
         "auto_kick_enabled": r["auto_kick_enabled"],
         "panel_manager_role": r["panel_manager_role"],
         "verified_role_id": r["verified_role_id"],
+        "recruit_post_channel_id": r["recruit_post_channel_id"],
     }
 
 
@@ -384,6 +387,11 @@ async def set_panel_manager_role(guild_id, role_id):
 
 async def set_verified_role(guild_id, role_id):
     await _upsert_setting(guild_id, "verified_role_id", role_id)
+
+
+async def set_recruit_post_channel(guild_id, channel_id):
+    """모집글이 게시될 전용 채널. None이면 모집 버튼을 누른 채널에 게시."""
+    await _upsert_setting(guild_id, "recruit_post_channel_id", channel_id)
 
 
 async def get_last_reviewed_at(guild_id):
