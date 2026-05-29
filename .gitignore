@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+party_bot.db
+.env
