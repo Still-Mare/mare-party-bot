@@ -396,3 +396,7 @@ async def archive_recruit_to_channel(bot, recruit_id: int):
     await delete_temp_role(guild, recruit)
 
     await db.archive_recruit(recruit_id)
+
+
+async def setup(bot):
+    await bot.add_cog(Recruitment(bot))

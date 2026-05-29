@@ -97,3 +97,7 @@ async def build_ranking_embed(bot, guild, period: str = "week") -> discord.Embed
         lines.append(f"{prefix} {name} — {fmt_duration(r['seconds'])}")
     embed.description = "\n".join(lines)
     return embed
+
+
+async def setup(bot):
+    await bot.add_cog(VoiceStats(bot))

@@ -525,3 +525,7 @@ class ControlPanel(commands.Cog):
             await interaction.response.send_message(
                 "유저용 패널을 설치했어요!", ephemeral=True
             )
+
+
+async def setup(bot):
+    await bot.add_cog(ControlPanel(bot))

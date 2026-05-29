@@ -134,3 +134,7 @@ async def refresh_role_panel(interaction: discord.Interaction):
 class GameRoles(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+
+async def setup(bot):
+    await bot.add_cog(GameRoles(bot))

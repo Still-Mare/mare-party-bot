@@ -83,3 +83,7 @@ class Verification(commands.Cog):
         )
         await interaction.channel.send(embed=embed, view=VerifyView())
         await interaction.response.send_message("인증 패널을 설치했어요!", ephemeral=True)
+
+
+async def setup(bot):
+    await bot.add_cog(Verification(bot))

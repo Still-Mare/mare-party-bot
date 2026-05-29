@@ -249,3 +249,7 @@ class LeaveActionSelect(ui.Select):
 class LeaveNotices(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+
+async def setup(bot):
+    await bot.add_cog(LeaveNotices(bot))

@@ -116,3 +116,7 @@ class SuggestionAdminView(ui.View):
 class Suggestions(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+
+async def setup(bot):
+    await bot.add_cog(Suggestions(bot))

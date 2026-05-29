@@ -294,3 +294,7 @@ class ActivityReview(commands.Cog):
         await channel.send(embed=embed, view=view)
         # 주간 시간 초기화 (다음 검토 주기 시작)
         await db.reset_week(guild.id)
+
+
+async def setup(bot):
+    await bot.add_cog(ActivityReview(bot))
