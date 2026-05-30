@@ -64,10 +64,31 @@ class Verification(commands.Cog):
                 "서버 관리자만 사용할 수 있어요.", ephemeral=True
             )
             return
+
+        # DB 조회 전 defer — 3초 타임아웃 방지
+        await interaction.response.defer(ephemeral=True)
+
         settings = await db.get_settings(interaction.guild.id)
         if not settings.get("verified_role_id"):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "먼저 관리자 패널의 '🔓 인증 역할 지정'으로 인증 역할을 설정해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        # 채널 권한 확인
+        perms = interaction.channel.permissions_for(interaction.guild.me)
+        missing = []
+        if not perms.send_messages:
+            missing.append("메시지 보내기 (Send Messages)")
+        if not perms.embed_links:
+            missing.append("임베드 링크 (Embed Links)")
+        if missing:
+            await interaction.followup.send(
+                f"**{interaction.channel.mention} 채널에 인증 패널을 설치할 수 없어요.**\n\n"
+                "봇에게 아래 권한이 부족해요:\n"
+                + "\n".join(f"• **{p}**" for p in missing)
+                + "\n\n채널 편집 → 권한 탭에서 봇 역할을 직접 추가해 위 항목을 체크해주세요.",
                 ephemeral=True,
             )
             return
@@ -76,13 +97,25 @@ class Verification(commands.Cog):
             "아래 **인증하기** 버튼을 누르면 서버 이용에 필요한 역할을 받아요.\n"
             "규칙을 잘 읽고 동의하셨다면 인증해주세요!"
         )
-        embed = discord.Embed(
-            title="✅ 서버 인증",
-            description=desc,
-            color=0x248046,
-        )
-        await interaction.channel.send(embed=embed, view=VerifyView())
-        await interaction.response.send_message("인증 패널을 설치했어요!", ephemeral=True)
+        embed = discord.Embed(title="✅ 서버 인증", description=desc, color=0x248046)
+
+        try:
+            await interaction.channel.send(embed=embed, view=VerifyView())
+        except discord.Forbidden as e:
+            await interaction.followup.send(
+                f"권한 오류 (403 / code {e.code}): {e.text}\n"
+                "채널 편집 → 권한 탭에서 봇 역할 권한을 확인해주세요.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.followup.send(
+                f"Discord API 오류 ({e.status} / code {e.code}): {e.text}",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send("인증 패널을 설치했어요!", ephemeral=True)
 
 
 async def setup(bot):
