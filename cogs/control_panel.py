@@ -108,9 +108,20 @@ class ControlPanelView(ui.View):
 
 
 class AdminPanelView(ui.View):
-    """관리자 전용 패널."""
+    """
+    관리자 전용 패널. 버튼 + 드롭다운 혼용.
+
+    Row 0: [게임 추가] [게임 삭제]       ← 버튼 (직접 실행)
+    Row 1: 채널 설정 드롭다운            ← Select
+    Row 2: 역할·통계 드롭다운            ← Select
+    Row 3: 활동검토 드롭다운             ← Select
+    Row 4: [▶️ 지금 활동검토 실행]       ← 버튼 (강조 액션)
+    """
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(ChannelSettingSelect())
+        self.add_item(RoleStatsSelect())
+        self.add_item(ActivityReviewSelect())
 
     @ui.button(label="게임 추가", emoji="➕",
                style=discord.ButtonStyle.success, custom_id="admin:addgame", row=0)
@@ -135,89 +146,6 @@ class AdminPanelView(ui.View):
             "삭제할 게임을 선택하세요.", view=RemoveGameView(games), ephemeral=True
         )
 
-    @ui.button(label="주간 랭킹 초기화", emoji="🔄",
-               style=discord.ButtonStyle.secondary, custom_id="admin:resetweek", row=2)
-    async def reset_week(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        await db.reset_week(interaction.guild.id)
-        await interaction.followup.send("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
-
-    @ui.button(label="음성방 카테고리 지정", emoji="📁",
-               style=discord.ButtonStyle.secondary, custom_id="admin:setcategory", row=1)
-    async def set_category(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
-            return
-        categories = interaction.guild.categories
-        if not categories:
-            await interaction.response.send_message("서버에 카테고리가 없어요.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "음성방을 만들 카테고리를 선택하세요.",
-            view=CategorySelectView(categories), ephemeral=True,
-        )
-
-    @ui.button(label="아카이브 채널 지정", emoji="📦",
-               style=discord.ButtonStyle.secondary, custom_id="admin:setarchive", row=1)
-    async def set_archive(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
-            return
-        await interaction.response.send_message(
-            "종료된 모집글을 보낼 채널을 선택하세요. (관리자만 보이는 채널 권장)",
-            view=ArchiveSelectView(), ephemeral=True,
-        )
-
-    @ui.button(label="모집글 채널 지정", emoji="📌",
-               style=discord.ButtonStyle.primary, custom_id="admin:setrecruitchannel", row=1)
-    async def set_recruit_channel(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        settings = await db.get_settings(interaction.guild.id)
-        current = (
-            f"현재: <#{settings['recruit_post_channel_id']}>\n\n"
-            if settings.get("recruit_post_channel_id")
-            else "현재: 미설정 (파티 모집 버튼을 누른 채널에 게시됨)\n\n"
-        )
-        await interaction.followup.send(
-            f"{current}모집글이 항상 게시될 전용 채널을 선택하세요.\n"
-            "설정하면 파티 모집 버튼이 어느 채널에 있든 모집글은 이 채널에 올라가요.",
-            view=RecruitChannelSelectView(), ephemeral=True,
-        )
-
-    @ui.button(label="활동검토 설정", emoji="📋",
-               style=discord.ButtonStyle.secondary, custom_id="admin:reviewsettings", row=3)
-    async def review_settings(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
-            return
-        await interaction.response.defer(ephemeral=True)
-        settings = await db.get_settings(interaction.guild.id)
-        from cogs.voice_stats import fmt_duration
-        log_ch = f"<#{settings['review_log_channel']}>" if settings["review_log_channel"] else "미설정"
-        exempt = f"<@&{settings['exempt_role_id']}>" if settings["exempt_role_id"] else "없음"
-        auto = "켜짐 (승인식 강퇴)" if settings["auto_kick_enabled"] else "꺼짐 (알림만)"
-        embed = discord.Embed(
-            title="📋 활동검토 설정",
-            description=(
-                f"**로그 채널**: {log_ch}\n"
-                f"**기준 시간**: 주당 {fmt_duration(settings['min_seconds'])}\n"
-                f"**면제 역할**: {exempt}\n"
-                f"**자동강퇴 모드**: {auto}\n\n"
-                "신규 가입 1주 미만 멤버는 항상 자동 제외돼요.\n"
-                "아래 버튼으로 항목을 설정하세요."
-            ),
-            color=0xBA7517,
-        )
-        await interaction.followup.send(
-            embed=embed, view=ReviewSettingsView(), ephemeral=True
-        )
-
     @ui.button(label="지금 활동검토 실행", emoji="▶️",
                style=discord.ButtonStyle.primary, custom_id="admin:runreview", row=4)
     async def run_review_now(self, interaction: discord.Interaction, button: ui.Button):
@@ -228,7 +156,8 @@ class AdminPanelView(ui.View):
         settings = await db.get_settings(interaction.guild.id)
         if not settings["review_log_channel"]:
             await interaction.followup.send(
-                "먼저 '활동검토 설정'에서 로그 채널을 지정해주세요.", ephemeral=True
+                "먼저 활동검토 드롭다운에서 '활동검토 설정 → 로그 채널'을 지정해주세요.",
+                ephemeral=True,
             )
             return
 
@@ -249,63 +178,180 @@ class AdminPanelView(ui.View):
             ephemeral=True,
         )
 
-    @ui.button(label="잠수 신고 검토", emoji="🕊️",
-               style=discord.ButtonStyle.secondary, custom_id="admin:leavereview", row=3)
-    async def review_leaves(self, interaction: discord.Interaction, button: ui.Button):
+
+# ───────── 관리자 패널 드롭다운 ─────────
+
+class ChannelSettingSelect(ui.Select):
+    """채널 설정 드롭다운 (Row 1)."""
+    def __init__(self):
+        super().__init__(
+            placeholder="📺  채널 설정",
+            custom_id="admin:channel_select",
+            row=1,
+            options=[
+                discord.SelectOption(
+                    label="음성방 카테고리 지정", value="set_category", emoji="📁",
+                    description="파티 음성방이 생성될 카테고리를 지정해요",
+                ),
+                discord.SelectOption(
+                    label="아카이브 채널 지정", value="set_archive", emoji="📦",
+                    description="종료된 모집글을 보관할 채널을 지정해요",
+                ),
+                discord.SelectOption(
+                    label="모집글 채널 지정", value="set_recruit", emoji="📌",
+                    description="파티 모집글이 항상 게시될 전용 채널을 지정해요",
+                ),
+            ],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
-        await interaction.response.defer(ephemeral=True)
-        notices = await db.list_pending_leave_notices(interaction.guild.id)
-        if not notices:
-            await interaction.followup.send("대기 중인 잠수 신고가 없어요.", ephemeral=True)
-            return
-
-        lines = []
-        for n in notices[:15]:
-            m = interaction.guild.get_member(n["user_id"])
-            name = m.display_name if m else f"<@{n['user_id']}>"
-            reason = n["reason"] or "_(미입력)_"
-            lines.append(
-                f"• `#{n['id']}` {name} → **{n['until_date'].isoformat()}**\n"
-                f"   사유: {reason}"
-            )
-        embed = discord.Embed(
-            title="🕊️ 대기 중인 잠수 신고",
-            description="\n\n".join(lines),
-            color=0xBA7517,
-        )
-        embed.set_footer(text=f"총 {len(notices)}건 · 아래 드롭다운으로 일괄 처리")
-
-        from cogs.leave_notices import LeaveReviewView
-        view = LeaveReviewView(notices, interaction.guild)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-
-    @ui.button(label="패널 관리 역할 지정", emoji="🔑",
-               style=discord.ButtonStyle.secondary, custom_id="admin:panelrole", row=2)
-    async def set_panel_role(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
+        value = self.values[0]
+        if value == "set_category":
+            categories = interaction.guild.categories
+            if not categories:
+                await interaction.response.send_message("서버에 카테고리가 없어요.", ephemeral=True)
+                return
             await interaction.response.send_message(
-                "서버 관리자만 설정할 수 있어요.", ephemeral=True
+                "음성방을 만들 카테고리를 선택하세요.",
+                view=CategorySelectView(categories), ephemeral=True,
             )
-            return
-        await interaction.response.send_message(
-            "/패널 명령어를 쓸 수 있는 역할을 선택하세요. (서버 관리자는 항상 사용 가능)",
-            view=PanelRoleSelectView(), ephemeral=True,
+        elif value == "set_archive":
+            await interaction.response.send_message(
+                "종료된 모집글을 보낼 채널을 선택하세요. (관리자만 보이는 채널 권장)",
+                view=ArchiveSelectView(), ephemeral=True,
+            )
+        elif value == "set_recruit":
+            await interaction.response.defer(ephemeral=True)
+            settings = await db.get_settings(interaction.guild.id)
+            current = (
+                f"현재: <#{settings['recruit_post_channel_id']}>\n\n"
+                if settings.get("recruit_post_channel_id")
+                else "현재: 미설정 (파티 모집 버튼을 누른 채널에 게시됨)\n\n"
+            )
+            await interaction.followup.send(
+                f"{current}모집글이 항상 게시될 전용 채널을 선택하세요.\n"
+                "설정하면 파티 모집 버튼이 어느 채널에 있든 모집글은 이 채널에 올라가요.",
+                view=RecruitChannelSelectView(), ephemeral=True,
+            )
+
+
+class RoleStatsSelect(ui.Select):
+    """역할·통계 드롭다운 (Row 2)."""
+    def __init__(self):
+        super().__init__(
+            placeholder="🔑  역할 · 통계 설정",
+            custom_id="admin:role_stats_select",
+            row=2,
+            options=[
+                discord.SelectOption(
+                    label="패널 관리 역할 지정", value="set_panel_role", emoji="🔑",
+                    description="/패널 명령어를 사용할 수 있는 역할을 지정해요",
+                ),
+                discord.SelectOption(
+                    label="인증 역할 지정", value="set_verify_role", emoji="🔓",
+                    description="규칙 인증 버튼 클릭 시 지급할 역할을 지정해요",
+                ),
+                discord.SelectOption(
+                    label="주간 랭킹 초기화", value="reset_week", emoji="🔄",
+                    description="이번 주 음성 이용 시간 통계를 초기화해요",
+                ),
+            ],
         )
 
-    @ui.button(label="인증 역할 지정", emoji="🔓",
-               style=discord.ButtonStyle.secondary, custom_id="admin:verifyrole", row=2)
-    async def set_verify_role(self, interaction: discord.Interaction, button: ui.Button):
+    async def callback(self, interaction: discord.Interaction):
         if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "서버 관리자만 설정할 수 있어요.", ephemeral=True
-            )
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
-        await interaction.response.send_message(
-            "규칙 인증 시 지급할 역할을 선택하세요. 설치는 `/인증패널` 명령어로 해요.",
-            view=VerifyRoleSelectView(), ephemeral=True,
+        value = self.values[0]
+        if value == "set_panel_role":
+            await interaction.response.send_message(
+                "/패널 명령어를 쓸 수 있는 역할을 선택하세요. (서버 관리자는 항상 사용 가능)",
+                view=PanelRoleSelectView(), ephemeral=True,
+            )
+        elif value == "set_verify_role":
+            await interaction.response.send_message(
+                "규칙 인증 시 지급할 역할을 선택하세요. 설치는 `/인증패널` 명령어로 해요.",
+                view=VerifyRoleSelectView(), ephemeral=True,
+            )
+        elif value == "reset_week":
+            await interaction.response.defer(ephemeral=True)
+            await db.reset_week(interaction.guild.id)
+            await interaction.followup.send("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
+
+
+class ActivityReviewSelect(ui.Select):
+    """활동검토 드롭다운 (Row 3)."""
+    def __init__(self):
+        super().__init__(
+            placeholder="📋  활동검토 관리",
+            custom_id="admin:activity_select",
+            row=3,
+            options=[
+                discord.SelectOption(
+                    label="활동검토 설정", value="review_settings", emoji="📋",
+                    description="기준 시간·로그 채널·면제 역할·자동강퇴 모드를 설정해요",
+                ),
+                discord.SelectOption(
+                    label="잠수 신고 검토", value="leave_review", emoji="🕊️",
+                    description="대기 중인 잠수 신고를 승인하거나 거절해요",
+                ),
+            ],
         )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        value = self.values[0]
+        if value == "review_settings":
+            await interaction.response.defer(ephemeral=True)
+            settings = await db.get_settings(interaction.guild.id)
+            from cogs.voice_stats import fmt_duration
+            log_ch = f"<#{settings['review_log_channel']}>" if settings["review_log_channel"] else "미설정"
+            exempt = f"<@&{settings['exempt_role_id']}>" if settings["exempt_role_id"] else "없음"
+            auto = "켜짐 (승인식 강퇴)" if settings["auto_kick_enabled"] else "꺼짐 (알림만)"
+            embed = discord.Embed(
+                title="📋 활동검토 설정",
+                description=(
+                    f"**로그 채널**: {log_ch}\n"
+                    f"**기준 시간**: 주당 {fmt_duration(settings['min_seconds'])}\n"
+                    f"**면제 역할**: {exempt}\n"
+                    f"**자동강퇴 모드**: {auto}\n\n"
+                    "신규 가입 1주 미만 멤버는 항상 자동 제외돼요.\n"
+                    "아래 버튼으로 항목을 설정하세요."
+                ),
+                color=0xBA7517,
+            )
+            await interaction.followup.send(
+                embed=embed, view=ReviewSettingsView(), ephemeral=True
+            )
+        elif value == "leave_review":
+            await interaction.response.defer(ephemeral=True)
+            notices = await db.list_pending_leave_notices(interaction.guild.id)
+            if not notices:
+                await interaction.followup.send("대기 중인 잠수 신고가 없어요.", ephemeral=True)
+                return
+            lines = []
+            for n in notices[:15]:
+                m = interaction.guild.get_member(n["user_id"])
+                name = m.display_name if m else f"<@{n['user_id']}>"
+                reason = n["reason"] or "_(미입력)_"
+                lines.append(
+                    f"• `#{n['id']}` {name} → **{n['until_date'].isoformat()}**\n"
+                    f"   사유: {reason}"
+                )
+            embed = discord.Embed(
+                title="🕊️ 대기 중인 잠수 신고",
+                description="\n\n".join(lines),
+                color=0xBA7517,
+            )
+            embed.set_footer(text=f"총 {len(notices)}건 · 아래 드롭다운으로 일괄 처리")
+            from cogs.leave_notices import LeaveReviewView
+            view = LeaveReviewView(notices, interaction.guild)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
 
 class PanelRoleSelectView(ui.View):
