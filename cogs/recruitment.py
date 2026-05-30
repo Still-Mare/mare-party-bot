@@ -403,8 +403,20 @@ class RecruitView(ui.View):
 
         await db.close_recruit(self.recruit_id)
         await delete_temp_role(interaction.guild, recruit)
-        await interaction.followup.send("모집을 마감했어요.", ephemeral=True)
-        await refresh_recruit_message(interaction.client, self.recruit_id)
+
+        if not recruit["voice_channel_id"]:
+            # 음성방이 없으면 즉시 아카이브 (채널에서 메시지 삭제 + 아카이브 채널 이동)
+            await interaction.followup.send("모집을 마감하고 정리했어요.", ephemeral=True)
+            await archive_recruit_to_channel(
+                interaction.client, self.recruit_id, reason="모집자가 마감함"
+            )
+        else:
+            # 음성방이 활성 중이면 마감 상태 표시 유지 → 전원 퇴장 시 자동 아카이브
+            await interaction.followup.send(
+                "모집을 마감했어요. 음성방에서 전원 퇴장하면 자동으로 정리돼요.",
+                ephemeral=True,
+            )
+            await refresh_recruit_message(interaction.client, self.recruit_id)
 
 
 class Recruitment(commands.Cog):
@@ -412,11 +424,14 @@ class Recruitment(commands.Cog):
         self.bot = bot
 
 
-async def archive_recruit_to_channel(bot, recruit_id: int):
+async def archive_recruit_to_channel(
+    bot, recruit_id: int, reason: str = "음성방이 닫혀 자동 종료됨"
+):
     """
-    음성방이 닫힐 때 호출.
     모집글을 아카이브 채널에 복제하고 원본을 삭제한다.
-    (디스코드는 메시지 이동이 불가능하므로 재게시 방식)
+    - 음성방 전원 퇴장 시: voice_stats.py에서 호출 (기본 reason)
+    - 마감 버튼(음성방 없음): close_btn에서 직접 호출 (reason="모집자가 마감함")
+    Discord는 메시지 이동이 불가능하므로 재게시 방식으로 구현한다.
     """
     recruit = await db.get_recruit(recruit_id)
     if not recruit:
@@ -432,16 +447,15 @@ async def archive_recruit_to_channel(bot, recruit_id: int):
 
     # 참가자 명단 수집
     user_ids = await db.list_participants(recruit_id)
-    members = [guild.get_member(uid) for uid in user_ids]
-    members = [m for m in members if m]
+    members = [m for uid in user_ids if (m := guild.get_member(uid))]
     host = guild.get_member(recruit["host_id"])
 
     # 아카이브 채널에 종료된 모집글 재게시
     if archive_channel:
-        embed = build_recruit_embed(recruit, members, host)
+        embed = build_recruit_embed(recruit, members, host, total_count=len(user_ids))
         embed.color = 0x4E5058
         embed.title = "📦 [종료] " + recruit["game_name"] + " 파티"
-        embed.add_field(name="상태", value="음성방이 닫혀 자동 종료됨", inline=False)
+        embed.add_field(name="종료 사유", value=reason, inline=False)
         try:
             await archive_channel.send(embed=embed)
         except discord.HTTPException:
@@ -452,7 +466,6 @@ async def archive_recruit_to_channel(bot, recruit_id: int):
     if channel and recruit["message_id"]:
         try:
             msg = await channel.fetch_message(recruit["message_id"])
-            # 딸린 스레드가 있으면 함께 삭제
             if msg.thread:
                 try:
                     await msg.thread.delete()
