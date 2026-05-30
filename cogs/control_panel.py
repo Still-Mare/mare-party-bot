@@ -136,7 +136,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="주간 랭킹 초기화", emoji="🔄",
-               style=discord.ButtonStyle.secondary, custom_id="admin:resetweek", row=1)
+               style=discord.ButtonStyle.secondary, custom_id="admin:resetweek", row=2)
     async def reset_week(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -146,7 +146,7 @@ class AdminPanelView(ui.View):
         await interaction.followup.send("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
 
     @ui.button(label="음성방 카테고리 지정", emoji="📁",
-               style=discord.ButtonStyle.secondary, custom_id="admin:setcategory", row=2)
+               style=discord.ButtonStyle.secondary, custom_id="admin:setcategory", row=1)
     async def set_category(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -161,7 +161,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="아카이브 채널 지정", emoji="📦",
-               style=discord.ButtonStyle.secondary, custom_id="admin:setarchive", row=2)
+               style=discord.ButtonStyle.secondary, custom_id="admin:setarchive", row=1)
     async def set_archive(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -172,7 +172,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="모집글 채널 지정", emoji="📌",
-               style=discord.ButtonStyle.primary, custom_id="admin:setrecruitchannel", row=2)
+               style=discord.ButtonStyle.primary, custom_id="admin:setrecruitchannel", row=1)
     async def set_recruit_channel(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -219,7 +219,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="지금 활동검토 실행", emoji="▶️",
-               style=discord.ButtonStyle.primary, custom_id="admin:runreview", row=3)
+               style=discord.ButtonStyle.primary, custom_id="admin:runreview", row=4)
     async def run_review_now(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -250,7 +250,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="잠수 신고 검토", emoji="🕊️",
-               style=discord.ButtonStyle.primary, custom_id="admin:leavereview", row=3)
+               style=discord.ButtonStyle.secondary, custom_id="admin:leavereview", row=3)
     async def review_leaves(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
@@ -282,7 +282,7 @@ class AdminPanelView(ui.View):
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
     @ui.button(label="패널 관리 역할 지정", emoji="🔑",
-               style=discord.ButtonStyle.secondary, custom_id="admin:panelrole", row=4)
+               style=discord.ButtonStyle.secondary, custom_id="admin:panelrole", row=2)
     async def set_panel_role(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message(
@@ -295,7 +295,7 @@ class AdminPanelView(ui.View):
         )
 
     @ui.button(label="인증 역할 지정", emoji="🔓",
-               style=discord.ButtonStyle.secondary, custom_id="admin:verifyrole", row=4)
+               style=discord.ButtonStyle.secondary, custom_id="admin:verifyrole", row=2)
     async def set_verify_role(self, interaction: discord.Interaction, button: ui.Button):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message(
@@ -526,35 +526,77 @@ async def can_manage_panel(interaction: discord.Interaction) -> bool:
 
 
 def build_recruit_panel_embed() -> discord.Embed:
-    return discord.Embed(
+    embed = discord.Embed(
         title="📢 파티 모집",
-        description="버튼을 눌러 파티원을 모집해요.",
+        description=(
+            "함께 플레이할 파티원을 모집해요.\n\n"
+            "버튼을 누르면 게임을 선택하고 모집 정보를 입력할 수 있어요.\n"
+            "모집글이 올라가면 해당 게임 역할 보유자에게 자동으로 알림이 가요."
+        ),
         color=0x248046,
     )
+    embed.set_footer(text="모집 완료 후 '모집 마감' 버튼을 눌러 정리해주세요.")
+    return embed
 
 
 def build_roles_panel_embed() -> discord.Embed:
-    return discord.Embed(
+    embed = discord.Embed(
         title="🎮 게임 역할",
-        description="관심 있는 게임의 모집 알림을 받아요.",
+        description=(
+            "관심 있는 게임의 역할을 받아 파티 모집 알림을 받아요.\n\n"
+            "버튼을 누르면 역할이 토글돼요. 이미 있으면 해제, 없으면 추가됩니다."
+        ),
         color=0x5865F2,
     )
+    embed.set_footer(text="역할이 있으면 해당 게임 파티 모집 시 멘션으로 알림을 받아요.")
+    return embed
 
 
 def build_activity_panel_embed() -> discord.Embed:
-    return discord.Embed(
+    embed = discord.Embed(
         title="📊 내 활동 & 커뮤니티",
-        description="음성 시간 확인, 잠수 신고, 익명 건의를 보낼 수 있어요.",
         color=0x4E5058,
     )
+    embed.add_field(
+        name="🔊 음성 통계",
+        value="내 이번 주·전체 이용 시간과\n서버 음성 랭킹을 확인해요.",
+        inline=True,
+    )
+    embed.add_field(
+        name="💬 커뮤니티",
+        value="운영진에게 익명으로 건의하거나\n잠수 기간을 신고해요.",
+        inline=True,
+    )
+    return embed
 
 
 def build_admin_panel_embed() -> discord.Embed:
-    return discord.Embed(
+    embed = discord.Embed(
         title="🛠️ 관리자 패널",
-        description="게임 등록/삭제, 음성방·아카이브 설정, 활동검토를 관리해요.",
+        description="서버 설정 및 운영 기능을 관리해요.",
         color=0xED4245,
     )
+    embed.add_field(
+        name="🎮 게임 관리",
+        value="게임 역할 추가 · 삭제",
+        inline=True,
+    )
+    embed.add_field(
+        name="📺 채널 설정",
+        value="음성방 · 아카이브 · 모집글 채널",
+        inline=True,
+    )
+    embed.add_field(
+        name="🔑 역할 · 통계",
+        value="패널 역할 · 인증 역할 · 랭킹 초기화",
+        inline=True,
+    )
+    embed.add_field(
+        name="📋 활동검토",
+        value="기준 시간 설정 · 잠수 신고 검토 · 수동 실행",
+        inline=False,
+    )
+    return embed
 
 
 class ControlPanel(commands.Cog):
