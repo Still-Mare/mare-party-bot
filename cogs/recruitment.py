@@ -240,8 +240,12 @@ class RecruitModal(ui.Modal, title="파티 모집글 작성"):
 # ───────── 게임 선택 (모집 시작) ─────────
 class GamePickSelect(ui.Select):
     def __init__(self, games):
+        from cogs.game_roles import _is_valid_emoji
         options = [
-            discord.SelectOption(label=g["name"], emoji=g["emoji"] or None)
+            discord.SelectOption(
+                label=g["name"],
+                emoji=g["emoji"] if _is_valid_emoji(g["emoji"]) else None,
+            )
             for g in games
         ]
         super().__init__(placeholder="모집할 게임 선택", options=options)

@@ -11,6 +11,23 @@ from discord import ui
 import database as db
 
 
+def _is_valid_emoji(s: str | None) -> bool:
+    """
+    Discord 버튼에 사용 가능한 이모지인지 확인.
+    - 유니코드 이모지: 비-ASCII 문자 포함 (예: 🎯)
+    - 커스텀 이모지: <:name:id> 또는 <a:name:id> 형식
+    일반 알파벳·숫자 문자열(예: "valorant")은 False.
+    """
+    if not s:
+        return False
+    s = s.strip()
+    if not s:
+        return False
+    if s.startswith("<") and s.endswith(">") and ":" in s:
+        return True
+    return any(ord(c) > 127 for c in s)
+
+
 # ───────── 게임 추가 모달 ─────────
 class AddGameModal(ui.Modal, title="게임 추가 (여러 개 가능)"):
     games_input = ui.TextInput(
@@ -47,6 +64,14 @@ class AddGameModal(ui.Modal, title="게임 추가 (여러 개 가능)"):
                 failed.append(f"`{line}` (형식 오류 — 이모지와 이름 모두 필요)")
                 continue
             emoji, name = parts[0], parts[1].strip()
+
+            # 이모지 유효성 검사 — 알파벳 문자열은 Discord 버튼 이모지로 사용 불가
+            if not _is_valid_emoji(emoji):
+                failed.append(
+                    f"`{line}` (이모지 오류 — '{emoji}'은 유효한 이모지가 아니에요. "
+                    f"🎯처럼 실제 이모지 문자를 첫 번째에 입력해주세요)"
+                )
+                continue
 
             existing = await db.get_game(guild.id, name)
             if existing:
@@ -89,7 +114,10 @@ class AddGameModal(ui.Modal, title="게임 추가 (여러 개 가능)"):
 class RemoveGameSelect(ui.Select):
     def __init__(self, games):
         options = [
-            discord.SelectOption(label=g["name"], emoji=g["emoji"] or None)
+            discord.SelectOption(
+                label=g["name"],
+                emoji=g["emoji"] if _is_valid_emoji(g["emoji"]) else None,
+            )
             for g in games
         ]
         super().__init__(placeholder="삭제할 게임 선택", options=options, max_values=1)
@@ -119,9 +147,11 @@ class RemoveGameView(ui.View):
 # ───────── 역할 토글 버튼 (영구 View) ─────────
 class RoleToggleButton(ui.Button):
     def __init__(self, game):
+        # DB에 잘못된 이모지가 저장된 경우 None으로 대체 (Invalid emoji 방지)
+        emoji = game["emoji"] if _is_valid_emoji(game["emoji"]) else None
         super().__init__(
             label=game["name"],
-            emoji=game["emoji"] or None,
+            emoji=emoji,
             style=discord.ButtonStyle.secondary,
             custom_id=f"roletoggle:{game['role_id']}",
         )

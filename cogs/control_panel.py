@@ -672,28 +672,30 @@ class ControlPanel(commands.Cog):
 
         kind = 종류.value
 
-        if kind == "recruit":
-            await interaction.channel.send(
-                embed=build_recruit_panel_embed(), view=RecruitPanelView()
+        panels = {
+            "recruit":  (build_recruit_panel_embed,  RecruitPanelView,
+                         "📢 파티 모집 패널을 설치했어요!"),
+            "roles":    (build_roles_panel_embed,    RolesPanelView,
+                         "🎮 게임 역할 패널을 설치했어요!"),
+            "activity": (build_activity_panel_embed, ActivityPanelView,
+                         "📊 내 활동 & 커뮤니티 패널을 설치했어요!"),
+            "admin":    (build_admin_panel_embed,    AdminPanelView,
+                         "🛠️ 관리자 패널을 설치했어요! (이 채널은 관리자만 보이게 권한 설정을 권장해요)"),
+        }
+        if kind not in panels:
+            await interaction.response.send_message("알 수 없는 패널 종류예요.", ephemeral=True)
+            return
+
+        embed_fn, view_cls, msg = panels[kind]
+        try:
+            await interaction.channel.send(embed=embed_fn(), view=view_cls())
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "이 채널에 메시지를 보낼 권한이 없어요.\n"
+                "봇 역할에 **메시지 보내기** 권한이 있는지 확인해주세요.",
+                ephemeral=True,
             )
-            msg = "📢 파티 모집 패널을 설치했어요!"
-        elif kind == "roles":
-            await interaction.channel.send(
-                embed=build_roles_panel_embed(), view=RolesPanelView()
-            )
-            msg = "🎮 게임 역할 패널을 설치했어요!"
-        elif kind == "activity":
-            await interaction.channel.send(
-                embed=build_activity_panel_embed(), view=ActivityPanelView()
-            )
-            msg = "📊 내 활동 & 커뮤니티 패널을 설치했어요!"
-        elif kind == "admin":
-            await interaction.channel.send(
-                embed=build_admin_panel_embed(), view=AdminPanelView()
-            )
-            msg = "🛠️ 관리자 패널을 설치했어요! (이 채널은 관리자만 보이게 권한 설정을 권장해요)"
-        else:
-            msg = "알 수 없는 패널 종류예요."
+            return
 
         await interaction.response.send_message(msg, ephemeral=True)
 
