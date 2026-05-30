@@ -688,7 +688,7 @@ class ControlPanel(commands.Cog):
 
         embed_fn, view_cls, msg = panels[kind]
 
-        # 필요 권한을 미리 확인해 정확히 어떤 권한이 없는지 안내
+        # 봇의 실효 권한 확인 (채널 오버라이드 포함)
         perms = interaction.channel.permissions_for(interaction.guild.me)
         missing = []
         if not perms.view_channel:
@@ -696,16 +696,35 @@ class ControlPanel(commands.Cog):
         if not perms.send_messages:
             missing.append("메시지 보내기 (Send Messages)")
         if not perms.embed_links:
-            missing.append("임베드 링크 (Embed Links)")  # 임베드 전송에 필수
+            missing.append("임베드 링크 (Embed Links)")
         if missing:
             await interaction.response.send_message(
-                f"이 채널에 패널을 설치하려면 봇에게 아래 권한이 필요해요:\n"
+                "이 채널에 패널을 설치하려면 봇에게 아래 권한이 필요해요:\n"
                 + "\n".join(f"• **{p}**" for p in missing),
                 ephemeral=True,
             )
             return
 
-        await interaction.channel.send(embed=embed_fn(), view=view_cls())
+        # 실제 전송 — 실패 시 정확한 Discord API 오류 코드를 관리자에게 표시
+        try:
+            await interaction.channel.send(embed=embed_fn(), view=view_cls())
+        except discord.Forbidden as e:
+            await interaction.response.send_message(
+                f"**권한 오류 (403 / code {e.code})**\n"
+                f"{e.text}\n\n"
+                f"봇 역할 권한 또는 채널 오버라이드를 다시 확인해주세요.\n"
+                f"(봇 role이 최상단 역할보다 위에 있어야 해요)",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as e:
+            await interaction.response.send_message(
+                f"**Discord API 오류 ({e.status} / code {e.code})**\n"
+                f"{e.text}",
+                ephemeral=True,
+            )
+            return
+
         await interaction.response.send_message(msg, ephemeral=True)
 
 
