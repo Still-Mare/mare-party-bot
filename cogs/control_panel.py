@@ -688,7 +688,7 @@ class ControlPanel(commands.Cog):
 
         embed_fn, view_cls, msg = panels[kind]
 
-        # 봇의 실효 권한 확인 (채널 오버라이드 포함)
+        # 봇의 실효 권한 확인 — 채널 오버라이드까지 포함한 최종 권한
         perms = interaction.channel.permissions_for(interaction.guild.me)
         missing = []
         if not perms.view_channel:
@@ -699,8 +699,14 @@ class ControlPanel(commands.Cog):
             missing.append("임베드 링크 (Embed Links)")
         if missing:
             await interaction.response.send_message(
-                "이 채널에 패널을 설치하려면 봇에게 아래 권한이 필요해요:\n"
-                + "\n".join(f"• **{p}**" for p in missing),
+                f"**{interaction.channel.mention} 채널에 패널을 설치할 수 없어요.**\n\n"
+                "봇에게 아래 권한이 부족해요:\n"
+                + "\n".join(f"• **{p}**" for p in missing)
+                + "\n\n"
+                "⚠️ **서버 역할 설정에서 켜도 이 메시지가 뜨는 경우:**\n"
+                "채널(또는 카테고리)의 **채널 편집 → 권한 탭**에서 "
+                "봇 역할을 직접 추가하고 위 항목을 ✅ 체크해야 해요.\n"
+                "채널 오버라이드가 서버 전체 역할 권한보다 우선하기 때문이에요.",
                 ephemeral=True,
             )
             return
