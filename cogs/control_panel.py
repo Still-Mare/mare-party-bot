@@ -687,16 +687,25 @@ class ControlPanel(commands.Cog):
             return
 
         embed_fn, view_cls, msg = panels[kind]
-        try:
-            await interaction.channel.send(embed=embed_fn(), view=view_cls())
-        except discord.Forbidden:
+
+        # 필요 권한을 미리 확인해 정확히 어떤 권한이 없는지 안내
+        perms = interaction.channel.permissions_for(interaction.guild.me)
+        missing = []
+        if not perms.view_channel:
+            missing.append("채널 보기 (View Channel)")
+        if not perms.send_messages:
+            missing.append("메시지 보내기 (Send Messages)")
+        if not perms.embed_links:
+            missing.append("임베드 링크 (Embed Links)")  # 임베드 전송에 필수
+        if missing:
             await interaction.response.send_message(
-                "이 채널에 메시지를 보낼 권한이 없어요.\n"
-                "봇 역할에 **메시지 보내기** 권한이 있는지 확인해주세요.",
+                f"이 채널에 패널을 설치하려면 봇에게 아래 권한이 필요해요:\n"
+                + "\n".join(f"• **{p}**" for p in missing),
                 ephemeral=True,
             )
             return
 
+        await interaction.channel.send(embed=embed_fn(), view=view_cls())
         await interaction.response.send_message(msg, ephemeral=True)
 
 
