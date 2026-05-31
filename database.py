@@ -18,11 +18,16 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "voice_category_id", "archive_channel_id", "review_log_channel",
     "exempt_role_id", "min_seconds", "auto_kick_enabled",
     "panel_manager_role", "verified_role_id", "last_reviewed_at",
-    "recruit_post_channel_id",
+    "recruit_post_channel_id", "points_per_hour",
+    "points_excluded_channel_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
 _join_locks: dict[int, asyncio.Lock] = {}
+
+# ─── 포인트 적립 최소 세션 시간 (초) ───────────────────────────────
+# 이 시간 미만 체류 시 포인트 미지급 — 빠른 입퇴장 어뷰징 방지
+_MIN_POINT_SESSION_SECS = 300  # 5분
 
 
 def _get_pool() -> asyncpg.Pool:
@@ -264,6 +269,7 @@ async def voice_leave(guild_id, user_id):
     """
     DELETE RETURNING으로 원자적 퇴장 처리.
     동시 호출 시 두 번째는 row가 없으므로 이중 누적이 발생하지 않는다.
+    퇴장 시 음성 시간에 비례한 포인트를 같은 트랜잭션에서 적립한다.
     """
     async with _get_pool().acquire() as con:
         async with con.transaction():
@@ -284,6 +290,22 @@ async def voice_leave(guild_id, user_id):
                      week_seconds  = voice_totals.week_seconds  + $3""",
                 guild_id, user_id, elapsed,
             )
+            # 포인트 적립 (시간당 포인트 비율 × 경과 시간)
+            settings_row = await con.fetchrow(
+                "SELECT points_per_hour FROM guild_settings WHERE guild_id = $1",
+                guild_id,
+            )
+            pph = settings_row["points_per_hour"] if settings_row else 10
+            if pph > 0 and elapsed >= _MIN_POINT_SESSION_SECS:
+                points_earned = int(elapsed * pph / 3600)
+                if points_earned > 0:
+                    await con.execute(
+                        """INSERT INTO user_points (guild_id, user_id, points)
+                           VALUES ($1, $2, $3)
+                           ON CONFLICT (guild_id, user_id) DO UPDATE
+                           SET points = user_points.points + $3""",
+                        guild_id, user_id, points_earned,
+                    )
 
 
 async def get_voice_total(guild_id, user_id):
@@ -562,3 +584,104 @@ async def expire_old_leave_notices():
                WHERE status = 'approved' AND until_date < CURRENT_DATE"""
         )
     return result
+
+
+# ─────────────────────── 포인트 시스템 ───────────────────────
+async def get_user_points(guild_id: int, user_id: int) -> int:
+    async with _get_pool().acquire() as con:
+        val = await con.fetchval(
+            "SELECT points FROM user_points WHERE guild_id = $1 AND user_id = $2",
+            guild_id, user_id,
+        )
+    return val if val is not None else 0
+
+
+async def add_user_points(guild_id: int, user_id: int, delta: int) -> int:
+    """포인트를 더하거나 뺀다 (음수 가능). 반환값: 새 잔액 (최소 0)."""
+    async with _get_pool().acquire() as con:
+        new_val = await con.fetchval(
+            """INSERT INTO user_points (guild_id, user_id, points)
+               VALUES ($1, $2, GREATEST(0, $3))
+               ON CONFLICT (guild_id, user_id) DO UPDATE
+               SET points = GREATEST(0, user_points.points + $3)
+               RETURNING points""",
+            guild_id, user_id, delta,
+        )
+    return new_val
+
+
+async def spend_user_points(guild_id: int, user_id: int, amount: int) -> bool:
+    """포인트를 원자적으로 차감한다. 잔액 부족이면 False를 반환한다."""
+    async with _get_pool().acquire() as con:
+        result = await con.fetchval(
+            """UPDATE user_points
+               SET points = points - $3
+               WHERE guild_id = $1 AND user_id = $2 AND points >= $3
+               RETURNING points""",
+            guild_id, user_id, amount,
+        )
+    return result is not None
+
+
+# ─────────────────────── 상점 역할 ───────────────────────
+async def list_shop_roles(guild_id: int) -> list:
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            "SELECT role_id, cost, label FROM shop_roles WHERE guild_id = $1 ORDER BY cost",
+            guild_id,
+        )
+    return [{"role_id": r["role_id"], "cost": r["cost"], "label": r["label"]} for r in rows]
+
+
+async def get_shop_role(guild_id: int, role_id: int):
+    async with _get_pool().acquire() as con:
+        r = await con.fetchrow(
+            "SELECT role_id, cost, label FROM shop_roles WHERE guild_id = $1 AND role_id = $2",
+            guild_id, role_id,
+        )
+    return {"role_id": r["role_id"], "cost": r["cost"], "label": r["label"]} if r else None
+
+
+async def add_shop_role(guild_id: int, role_id: int, cost: int, label: str | None = None):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO shop_roles (guild_id, role_id, cost, label)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (guild_id, role_id) DO UPDATE SET cost = $3, label = $4""",
+            guild_id, role_id, cost, label,
+        )
+
+
+async def remove_shop_role(guild_id: int, role_id: int):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            "DELETE FROM shop_roles WHERE guild_id = $1 AND role_id = $2",
+            guild_id, role_id,
+        )
+
+
+async def get_points_per_hour(guild_id: int) -> int:
+    async with _get_pool().acquire() as con:
+        val = await con.fetchval(
+            "SELECT points_per_hour FROM guild_settings WHERE guild_id = $1",
+            guild_id,
+        )
+    return val if val is not None else 10
+
+
+async def set_points_per_hour(guild_id: int, pph: int):
+    await _upsert_setting(guild_id, "points_per_hour", pph)
+
+
+async def get_points_excluded_channel(guild_id: int) -> int | None:
+    """포인트 미지급 채널(잠수채널) ID 반환. 미설정 시 None."""
+    async with _get_pool().acquire() as con:
+        return await con.fetchval(
+            "SELECT points_excluded_channel_id FROM guild_settings WHERE guild_id = $1",
+            guild_id,
+        )
+
+
+async def set_points_excluded_channel(guild_id: int, channel_id: int | None):
+    """포인트 미지급 채널을 설정한다. None이면 해제."""
+    await _upsert_setting(guild_id, "points_excluded_channel_id", channel_id)

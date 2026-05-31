@@ -10,7 +10,7 @@ from discord import ui, app_commands
 
 import database as db
 from cogs.game_roles import (
-    AddGameModal, RemoveGameView, RolePanelView,
+    AddGameModal, RemoveGameView, RolePanelView, CustomEmojiAddView,
 )
 from cogs.recruitment import GamePickView
 from cogs.voice_stats import build_my_stats_embed, build_ranking_embed
@@ -129,7 +129,22 @@ class AdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_roles:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
-        await interaction.response.send_modal(AddGameModal())
+
+        emojis = interaction.guild.emojis
+        if not emojis:
+            # 서버에 커스텀 이모지가 없으면 바로 기존 모달
+            await interaction.response.send_modal(AddGameModal())
+            return
+
+        total = len(emojis)
+        extra = f"\n*(이 서버 커스텀 이모지 {total}개 중 최대 25개 표시)*" if total > 25 else ""
+        await interaction.response.send_message(
+            f"**게임 추가**{extra}\n\n"
+            "아래 드롭다운에서 **서버 커스텀 이모지**를 선택하거나,\n"
+            "**🔤 유니코드 이모지로 추가**를 눌러 여러 게임을 한 번에 입력하세요.",
+            view=CustomEmojiAddView(list(emojis)),
+            ephemeral=True,
+        )
 
     @ui.button(label="게임 삭제", emoji="🗑️",
                style=discord.ButtonStyle.danger, custom_id="admin:delgame", row=0)

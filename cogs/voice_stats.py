@@ -23,11 +23,26 @@ class VoiceStats(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 
+    async def _no_points_channel(self, channel, guild_id: int) -> bool:
+        """이 채널에 있는 동안 포인트를 지급하지 않아야 하면 True."""
+        if channel is None:
+            return False
+        # Discord 내장 AFK 채널
+        if channel.guild.afk_channel_id and channel.id == channel.guild.afk_channel_id:
+            return True
+        # 관리자가 지정한 잠수채널
+        excluded = await db.get_points_excluded_channel(guild_id)
+        return bool(excluded and channel.id == excluded)
+
     @commands.Cog.listener()
     async def on_ready(self):
-        # 봇 재시작 시 현재 음성방에 있는 사람들 세션 시작
+        # 봇 재시작 시 현재 음성방에 있는 사람들 세션 시작 (잠수채널 제외)
         for guild in self.bot.guilds:
+            afk_id      = guild.afk_channel_id
+            excluded_id = await db.get_points_excluded_channel(guild.id)
             for vc in guild.voice_channels:
+                if (afk_id and vc.id == afk_id) or (excluded_id and vc.id == excluded_id):
+                    continue  # 잠수채널은 세션 시작 안 함
                 for member in vc.members:
                     if not member.bot:
                         await db.voice_join(guild.id, member.id)
@@ -36,17 +51,34 @@ class VoiceStats(commands.Cog):
     async def on_voice_state_update(self, member, before, after):
         if member.bot:
             return
-        # 음성방 진입 (이전엔 없었는데 지금 있음)
+
+        guild   = member.guild
+        was_afk = await self._no_points_channel(before.channel, guild.id)
+        now_afk = await self._no_points_channel(after.channel,  guild.id)
+
         if before.channel is None and after.channel is not None:
-            await db.voice_join(member.guild.id, member.id)
-        # 음성방 퇴장
+            # ── 음성방 최초 진입 ──
+            if not now_afk:
+                await db.voice_join(guild.id, member.id)
+            # 잠수채널 직접 진입 시: 세션 시작 안 함
+
         elif before.channel is not None and after.channel is None:
-            await db.voice_leave(member.guild.id, member.id)
-        # 채널 이동: 세션은 유지되므로 누적시간 계산엔 영향 없음
-        # (voice_join을 다시 부르면 입장시각이 리셋되어 시간이 깎이므로 호출하지 않음)
+            # ── 음성방 퇴장 ──
+            if not was_afk:
+                await db.voice_leave(guild.id, member.id)
+            # 잠수채널에서 나갔을 때: 세션이 없으므로 아무것도 안 함
+
+        elif before.channel is not None and after.channel is not None:
+            # ── 채널 이동 ──
+            if not was_afk and now_afk:
+                # 일반채널 → 잠수채널: 현재까지 누적 시간/포인트 정산 후 세션 종료
+                await db.voice_leave(guild.id, member.id)
+            elif was_afk and not now_afk:
+                # 잠수채널 → 일반채널: 새 세션 시작
+                await db.voice_join(guild.id, member.id)
+            # 일반→일반 또는 잠수→잠수: 세션 유지 (입장시각 리셋 방지)
 
         # ── 모집용 음성방이 비었는지 확인 ──
-        # 누군가 채널을 떠났을 때(before.channel이 있을 때) 그 방을 점검
         if before.channel is not None:
             await self._check_empty_recruit_voice(before.channel)
 

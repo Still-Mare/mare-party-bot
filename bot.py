@@ -14,6 +14,7 @@ from discord.ext import commands
 import database as db
 from cogs.control_panel import ControlPanelView, AdminPanelView
 from cogs.recruitment import RecruitView
+from cogs.point_shop import ShopUserPanelView, ShopAdminPanelView
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("party-bot")
@@ -45,6 +46,7 @@ class PartyBot(commands.Bot):
         await self.load_extension("cogs.verification")
         await self.load_extension("cogs.suggestions")
         await self.load_extension("cogs.leave_notices")
+        await self.load_extension("cogs.point_shop")
 
         # 영구 View 재등록 (봇 재시작 후에도 버튼이 동작하도록)
         from cogs.control_panel import (
@@ -55,6 +57,8 @@ class PartyBot(commands.Bot):
         self.add_view(ActivityPanelView())
         self.add_view(ControlPanelView())  # 하위 호환 (기존 메시지가 있다면)
         self.add_view(AdminPanelView())
+        self.add_view(ShopUserPanelView())
+        self.add_view(ShopAdminPanelView())
         from cogs.verification import VerifyView
         self.add_view(VerifyView())
         from cogs.suggestions import SuggestionAdminView

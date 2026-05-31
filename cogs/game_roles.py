@@ -144,6 +144,93 @@ class RemoveGameView(ui.View):
         self.add_item(RemoveGameSelect(games))
 
 
+# ───────── 커스텀 이모지 게임 추가 ─────────
+
+class CustomEmojiAddView(ui.View):
+    """
+    서버 커스텀 이모지 드롭다운 + 유니코드 이모지 버튼.
+    게임 추가 시 이모지 방식 선택 화면.
+    """
+    def __init__(self, emojis: list):
+        super().__init__(timeout=60)
+        if emojis:
+            sorted_emojis = sorted(emojis, key=lambda e: e.name.lower())[:25]
+            self.add_item(CustomEmojiSelect(sorted_emojis))
+        self.add_item(UseUnicodeEmojiButton())
+
+
+class CustomEmojiSelect(ui.Select):
+    def __init__(self, emojis: list):
+        options = [
+            discord.SelectOption(
+                label=e.name[:100],
+                value=f"<{'a' if e.animated else ''}:{e.name}:{e.id}>",
+                emoji=e,
+            )
+            for e in emojis
+        ]
+        super().__init__(placeholder="서버 커스텀 이모지 선택", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        emoji_str = self.values[0]  # "<:name:id>" 또는 "<a:name:id>" 형식
+        await interaction.response.send_modal(CustomEmojiGameNameModal(emoji_str))
+
+
+class UseUnicodeEmojiButton(ui.Button):
+    def __init__(self):
+        super().__init__(label="유니코드 이모지로 추가", emoji="🔤",
+                         style=discord.ButtonStyle.secondary)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(AddGameModal())
+
+
+class CustomEmojiGameNameModal(ui.Modal):
+    """커스텀 이모지 선택 후 게임 이름을 입력받는 모달."""
+    game_name = ui.TextInput(
+        label="게임 이름",
+        placeholder="예: 발로란트",
+        max_length=50,
+    )
+
+    def __init__(self, emoji_str: str):
+        super().__init__(title="게임 이름 입력")
+        self.emoji_str = emoji_str
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = str(self.game_name).strip()
+        if not name:
+            await interaction.response.send_message("게임 이름을 입력해주세요.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        guild = interaction.guild
+
+        existing = await db.get_game(guild.id, name)
+        if existing:
+            await interaction.followup.send(f"**{name}**은 이미 등록된 게임이에요.", ephemeral=True)
+            return
+
+        role = discord.utils.get(guild.roles, name=name)
+        if role is None:
+            try:
+                role = await guild.create_role(
+                    name=name, mentionable=True,
+                    reason=f"{interaction.user} 게임 추가",
+                )
+            except discord.Forbidden:
+                await interaction.followup.send("역할 생성 권한이 없어요.", ephemeral=True)
+                return
+            except discord.HTTPException as e:
+                await interaction.followup.send(f"역할 생성 오류: {e}", ephemeral=True)
+                return
+
+        await db.add_game(guild.id, name, self.emoji_str, role.id)
+        await interaction.followup.send(
+            f"✅ {self.emoji_str} **{name}** 게임을 추가했어요!", ephemeral=True
+        )
+
+
 # ───────── 역할 토글 버튼 (영구 View) ─────────
 class RoleToggleButton(ui.Button):
     def __init__(self, game):
