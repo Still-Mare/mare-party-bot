@@ -27,8 +27,9 @@ class VoiceStats(commands.Cog):
         """이 채널에 있는 동안 포인트를 지급하지 않아야 하면 True."""
         if channel is None:
             return False
-        # Discord 내장 AFK 채널
-        if channel.guild.afk_channel_id and channel.id == channel.guild.afk_channel_id:
+        # Discord 내장 AFK 채널 (afk_channel_id는 2.x에서 비공개 — afk_channel 사용)
+        afk_ch = channel.guild.afk_channel
+        if afk_ch and channel.id == afk_ch.id:
             return True
         # 관리자가 지정한 잠수채널
         excluded = await db.get_points_excluded_channel(guild_id)
@@ -38,7 +39,7 @@ class VoiceStats(commands.Cog):
     async def on_ready(self):
         # 봇 재시작 시 현재 음성방에 있는 사람들 세션 시작 (잠수채널 제외)
         for guild in self.bot.guilds:
-            afk_id      = guild.afk_channel_id
+            afk_id      = guild.afk_channel.id if guild.afk_channel else None
             excluded_id = await db.get_points_excluded_channel(guild.id)
             for vc in guild.voice_channels:
                 if (afk_id and vc.id == afk_id) or (excluded_id and vc.id == excluded_id):

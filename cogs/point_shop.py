@@ -161,7 +161,7 @@ class ShopAdminPanelView(ui.View):
         items       = await db.list_shop_roles(interaction.guild.id)
         p10m        = await db.get_points_per_10min(interaction.guild.id)
         excluded_id = await db.get_points_excluded_channel(interaction.guild.id)
-        afk_id      = interaction.guild.afk_channel_id
+        afk_id      = interaction.guild.afk_channel.id if interaction.guild.afk_channel else None
 
         embed = discord.Embed(title="📋 포인트 상점 현황", color=0x5865F2)
         embed.add_field(
@@ -214,7 +214,7 @@ class ShopAdminPanelView(ui.View):
         await interaction.response.defer(ephemeral=True)
 
         excluded_id = await db.get_points_excluded_channel(interaction.guild.id)
-        afk_id      = interaction.guild.afk_channel_id
+        afk_id      = interaction.guild.afk_channel.id if interaction.guild.afk_channel else None
 
         lines = ["포인트가 지급되지 않을 채널을 설정해요.\n"]
         if afk_id:
