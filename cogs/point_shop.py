@@ -35,11 +35,11 @@ class ShopUserPanelView(ui.View):
     async def my_points(self, interaction: discord.Interaction, button: ui.Button):
         await interaction.response.defer(ephemeral=True)
         points = await db.get_user_points(interaction.guild.id, interaction.user.id)
-        pph    = await db.get_points_per_hour(interaction.guild.id)
+        p10m   = await db.get_points_per_10min(interaction.guild.id)
 
         embed = discord.Embed(title="💰 내 포인트 현황", color=0xF1C40F)
         embed.add_field(name="현재 잔액",  value=f"**{points:,}** 포인트", inline=True)
-        embed.add_field(name="적립 비율",  value=f"1시간 = **{pph}** 포인트", inline=True)
+        embed.add_field(name="적립 비율",  value=f"10분 = **{p10m}** 포인트", inline=True)
         embed.set_footer(text=f"{interaction.user.display_name} · 음성채널에 있을수록 포인트가 쌓여요")
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -94,9 +94,9 @@ class ShopAdminPanelView(ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # ── 시간당 포인트 설정 ─────────────────────────────────────
+    # ── 10분당 포인트 설정 ────────────────────────────────────
     @ui.button(
-        label="시간당 포인트", emoji="🪙",
+        label="10분당 포인트", emoji="🪙",
         style=discord.ButtonStyle.secondary,
         custom_id="shopadmin:setpph",
         row=0,
@@ -105,7 +105,7 @@ class ShopAdminPanelView(ui.View):
         if not interaction.user.guild_permissions.manage_guild:
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
-        await interaction.response.send_modal(SetPointsPerHourModal())
+        await interaction.response.send_modal(SetPointsPer10MinModal())
 
     # ── 역할 추가 ──────────────────────────────────────────────
     @ui.button(
@@ -159,14 +159,14 @@ class ShopAdminPanelView(ui.View):
             return
         await interaction.response.defer(ephemeral=True)
         items       = await db.list_shop_roles(interaction.guild.id)
-        pph         = await db.get_points_per_hour(interaction.guild.id)
+        p10m        = await db.get_points_per_10min(interaction.guild.id)
         excluded_id = await db.get_points_excluded_channel(interaction.guild.id)
         afk_id      = interaction.guild.afk_channel_id
 
         embed = discord.Embed(title="📋 포인트 상점 현황", color=0x5865F2)
         embed.add_field(
             name="🪙 적립 비율",
-            value=f"음성 1시간 = **{pph}** 포인트  (1분 미만 세션 제외)",
+            value=f"음성 10분 = **{p10m}** 포인트  (5분 미만 세션 제외)",
             inline=False,
         )
 
@@ -325,28 +325,28 @@ class BuyRoleSelect(ui.Select):
 #  관리자 설정 Views & Modals
 # ═══════════════════════════════════════════════════════════════
 
-class SetPointsPerHourModal(ui.Modal, title="시간당 포인트 설정"):
-    pph_input = ui.TextInput(
-        label="음성채널 1시간당 지급 포인트",
-        placeholder="예: 10  (0이면 포인트 지급 안 함)",
-        max_length=6,
+class SetPointsPer10MinModal(ui.Modal, title="10분당 포인트 설정"):
+    p10m_input = ui.TextInput(
+        label="음성채널 10분당 지급 포인트",
+        placeholder="예: 2  (0이면 포인트 지급 안 함)",
+        max_length=5,
     )
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
-            pph = int(str(self.pph_input).strip())
-            if pph < 0 or pph > 100_000:
+            p10m = int(str(self.p10m_input).strip())
+            if p10m < 0 or p10m > 10_000:
                 raise ValueError
         except ValueError:
             await interaction.response.send_message(
-                "0~100,000 사이의 정수를 입력해주세요.", ephemeral=True
+                "0~10,000 사이의 정수를 입력해주세요.", ephemeral=True
             )
             return
-        await db.set_points_per_hour(interaction.guild.id, pph)
-        state = f"**{pph}** 포인트" if pph > 0 else "**0** (지급 비활성화)"
+        await db.set_points_per_10min(interaction.guild.id, p10m)
+        state = f"**{p10m}** 포인트" if p10m > 0 else "**0** (지급 비활성화)"
         await interaction.response.send_message(
-            f"시간당 포인트를 {state}(으)로 설정했어요.\n"
-            f"음성채널 1시간 이용 시 {pph} 포인트가 적립됩니다.",
+            f"10분당 포인트를 {state}(으)로 설정했어요.\n"
+            f"음성채널 10분 이용 시 {p10m} 포인트가 적립돼요.",
             ephemeral=True,
         )
 
@@ -502,7 +502,7 @@ def build_shop_admin_panel_embed() -> discord.Embed:
         title="🛠️ 포인트 상점 설정",
         description=(
             "음성채널 포인트 시스템과 역할 상점을 관리해요.\n\n"
-            "**🪙 시간당 포인트** — 음성채널 1시간당 지급 포인트 비율 설정\n"
+            "**🪙 10분당 포인트** — 음성채널 10분당 지급 포인트 비율 설정\n"
             "**➕ 역할 추가** — 판매할 역할과 가격 등록\n"
             "**🗑️ 역할 제거** — 상점에서 역할 삭제\n"
             "**📋 현황 보기** — 현재 설정 및 등록 역할 전체 조회\n"
@@ -510,7 +510,7 @@ def build_shop_admin_panel_embed() -> discord.Embed:
         ),
         color=0x5865F2,
     )
-    embed.set_footer(text="1분 미만 세션 포인트 미지급 · Discord AFK 채널 자동 제외")
+    embed.set_footer(text="5분 미만 세션 포인트 미지급 · Discord AFK 채널 자동 제외")
     return embed
 
 

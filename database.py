@@ -18,7 +18,7 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "voice_category_id", "archive_channel_id", "review_log_channel",
     "exempt_role_id", "min_seconds", "auto_kick_enabled",
     "panel_manager_role", "verified_role_id", "last_reviewed_at",
-    "recruit_post_channel_id", "points_per_hour",
+    "recruit_post_channel_id", "points_per_10min",
     "points_excluded_channel_id",
 })
 
@@ -290,14 +290,14 @@ async def voice_leave(guild_id, user_id):
                      week_seconds  = voice_totals.week_seconds  + $3""",
                 guild_id, user_id, elapsed,
             )
-            # 포인트 적립 (시간당 포인트 비율 × 경과 시간)
+            # 포인트 적립 (10분당 포인트 비율 × 경과 시간)
             settings_row = await con.fetchrow(
-                "SELECT points_per_hour FROM guild_settings WHERE guild_id = $1",
+                "SELECT points_per_10min FROM guild_settings WHERE guild_id = $1",
                 guild_id,
             )
-            pph = settings_row["points_per_hour"] if settings_row else 10
-            if pph > 0 and elapsed >= _MIN_POINT_SESSION_SECS:
-                points_earned = int(elapsed * pph / 3600)
+            p10m = settings_row["points_per_10min"] if settings_row else 2
+            if p10m > 0 and elapsed >= _MIN_POINT_SESSION_SECS:
+                points_earned = int(elapsed * p10m / 600)
                 if points_earned > 0:
                     await con.execute(
                         """INSERT INTO user_points (guild_id, user_id, points)
@@ -660,17 +660,17 @@ async def remove_shop_role(guild_id: int, role_id: int):
         )
 
 
-async def get_points_per_hour(guild_id: int) -> int:
+async def get_points_per_10min(guild_id: int) -> int:
     async with _get_pool().acquire() as con:
         val = await con.fetchval(
-            "SELECT points_per_hour FROM guild_settings WHERE guild_id = $1",
+            "SELECT points_per_10min FROM guild_settings WHERE guild_id = $1",
             guild_id,
         )
-    return val if val is not None else 10
+    return val if val is not None else 2
 
 
-async def set_points_per_hour(guild_id: int, pph: int):
-    await _upsert_setting(guild_id, "points_per_hour", pph)
+async def set_points_per_10min(guild_id: int, p10m: int):
+    await _upsert_setting(guild_id, "points_per_10min", p10m)
 
 
 async def get_points_excluded_channel(guild_id: int) -> int | None:
