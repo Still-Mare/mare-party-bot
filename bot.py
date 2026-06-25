@@ -70,6 +70,8 @@ class PartyBot(commands.Bot):
         self.add_view(VerifyView())
         from cogs.suggestions import SuggestionAdminView
         self.add_view(SuggestionAdminView())
+        from cogs.nicknames import NicknamePanelView
+        self.add_view(NicknamePanelView())
 
         # 기존 모집글 / 역할 버튼 복원
         await self._restore_persistent_views()
@@ -84,6 +86,13 @@ class PartyBot(commands.Bot):
         for recruit_id in recruit_ids:
             self.add_view(RecruitView(recruit_id))
         log.info(f"열린 모집글 {len(recruit_ids)}개 View 복원")
+
+        # 대기 중 오픈채팅 신청의 승인/거절 버튼 복원
+        from cogs.entry_tracking import OpenChatReviewView
+        oc_ids = await db.list_pending_openchat_request_ids()
+        for rid in oc_ids:
+            self.add_view(OpenChatReviewView(rid))
+        log.info(f"대기 중 오픈채팅 신청 {len(oc_ids)}개 View 복원")
 
     async def on_ready(self):
         log.info(f"로그인됨: {self.user} (ID: {self.user.id})")

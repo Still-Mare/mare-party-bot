@@ -27,6 +27,8 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     # 010 입장 경로 + 오픈채팅 게이트
     "openchat_url", "openchat_gate_role_id",
     "kakao_invite_code", "entry_marker_role_id",
+    # 012 오픈채팅 운영자 승인제
+    "openchat_approval_required", "openchat_request_channel_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
@@ -353,7 +355,8 @@ async def get_settings(guild_id):
                       nickname_log_channel_id,
                       blacklist_ban_on_join, blacklist_notify,
                       openchat_url, openchat_gate_role_id,
-                      kakao_invite_code, entry_marker_role_id
+                      kakao_invite_code, entry_marker_role_id,
+                      openchat_approval_required, openchat_request_channel_id
                FROM guild_settings WHERE guild_id = $1""",
             guild_id,
         )
@@ -368,6 +371,7 @@ async def get_settings(guild_id):
             "blacklist_ban_on_join": 0, "blacklist_notify": 1,
             "openchat_url": None, "openchat_gate_role_id": None,
             "kakao_invite_code": None, "entry_marker_role_id": None,
+            "openchat_approval_required": 0, "openchat_request_channel_id": None,
         }
     return {
         "voice_category_id": r["voice_category_id"],
@@ -386,6 +390,8 @@ async def get_settings(guild_id):
         "openchat_gate_role_id": r["openchat_gate_role_id"],
         "kakao_invite_code": r["kakao_invite_code"],
         "entry_marker_role_id": r["entry_marker_role_id"],
+        "openchat_approval_required": r["openchat_approval_required"],
+        "openchat_request_channel_id": r["openchat_request_channel_id"],
     }
 
 
@@ -977,3 +983,77 @@ async def list_enabled_stickies(guild_id: int) -> list:
          "content": r["content"], "last_message_id": r["last_message_id"]}
         for r in rows
     ]
+
+
+# ─────────────────────── 012 오픈채팅 운영자 승인제 ───────────────────────
+async def set_openchat_approval_required(guild_id: int, enabled: bool):
+    await _upsert_setting(guild_id, "openchat_approval_required", 1 if enabled else 0)
+
+
+async def set_openchat_request_channel(guild_id: int, channel_id: int | None):
+    await _upsert_setting(guild_id, "openchat_request_channel_id", channel_id)
+
+
+async def create_openchat_request(guild_id: int, user_id: int) -> int | None:
+    """
+    대기 중 신청이 없으면 생성하고 id 반환. 이미 대기 중이면 None.
+    WHERE NOT EXISTS 로 1차 방어하고, 동시 클릭 레이스는 부분 유니크 인덱스
+    (uq_openchat_requests_one_pending)가 막아 UniqueViolation 시 None 반환.
+    """
+    async with _get_pool().acquire() as con:
+        try:
+            return await con.fetchval(
+                """INSERT INTO openchat_requests (guild_id, user_id)
+                   SELECT $1, $2
+                   WHERE NOT EXISTS (
+                       SELECT 1 FROM openchat_requests
+                       WHERE guild_id = $1 AND user_id = $2 AND status = 'pending'
+                   )
+                   RETURNING id""",
+                guild_id, user_id,
+            )
+        except asyncpg.UniqueViolationError:
+            return None
+
+
+async def set_openchat_request_msg(request_id: int, message_id: int):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            "UPDATE openchat_requests SET review_msg_id = $1 WHERE id = $2",
+            message_id, request_id,
+        )
+
+
+async def get_openchat_request(request_id: int):
+    async with _get_pool().acquire() as con:
+        r = await con.fetchrow(
+            "SELECT id, guild_id, user_id, status FROM openchat_requests WHERE id = $1",
+            request_id,
+        )
+    if not r:
+        return None
+    return {"id": r["id"], "guild_id": r["guild_id"], "user_id": r["user_id"], "status": r["status"]}
+
+
+async def review_openchat_request(request_id: int, reviewer_id: int, approved: bool):
+    """
+    pending 신청을 승인/거절 처리. 원자적으로 status를 바꾼다.
+    처리에 성공하면 신청자 user_id 반환, 이미 처리됐으면 None(중복 처리 방지).
+    """
+    status = "approved" if approved else "rejected"
+    async with _get_pool().acquire() as con:
+        r = await con.fetchrow(
+            """UPDATE openchat_requests
+               SET status = $1, reviewed_by = $2, reviewed_at = now()
+               WHERE id = $3 AND status = 'pending'
+               RETURNING user_id""",
+            status, reviewer_id, request_id,
+        )
+    return r["user_id"] if r else None
+
+
+async def list_pending_openchat_request_ids() -> list:
+    """봇 재시작 시 영구 View 복원용: 대기 중 신청 ID 목록."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch("SELECT id FROM openchat_requests WHERE status = 'pending'")
+    return [r["id"] for r in rows]

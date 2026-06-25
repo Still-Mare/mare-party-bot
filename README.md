@@ -20,7 +20,7 @@
 | 🔓 규칙 인증 | 버튼 클릭으로 인증 역할 자동 지급 |
 | 📨 익명 건의함 | 버튼 → 모달로 익명 건의 → 관리자 채널 게시. 작성자는 서버 주인만 확인 가능 |
 | 🕊️ 잠수 신고 | 활동검토 면제 신청 (3일/1주/2주/1개월 또는 날짜 직접 입력). 관리자 승인식 |
-| 🔐 입장 이중보안 | 카카오 오픈채팅 URL을 채널에 안 올리고, 인증 통과자에게만 본인에게만 보이는 메시지로 전달 → 초대코드 정지 회피. 카카오/디스코드 유입 경로 자동 구분 |
+| 🔐 입장 이중보안 | 카카오 오픈채팅 URL을 채널에 안 올리고, 인증 통과자에게만 본인에게만 보이는 메시지로 전달 → 초대코드 정지 회피. 카카오/디스코드 유입 경로 자동 구분. (선택) 운영자 승인제 — 신청 → 운영자가 카톡 입장 확인 후 승인 |
 | 🚫 블랙리스트 | 디스코드 고유 ID 기반 차단. 이미 나간 유저도 ID로 등록해 재입장 차단(강퇴/밴 토글, 네이티브 밴 옵션) |
 | 👀 관전 | 파티 정원이 차도 관전자는 음성방 입장 가능, 닉네임 앞에 "관전 " 표시 (종료 시 자동 복원) |
 | ✏️ 셀프 닉네임 | 서버가 별명 변경을 막아둬도 봇이 대신 변경. old→new 변경 이력 기록·조회 |
@@ -149,7 +149,9 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     openchat_url                TEXT,                -- 카카오 오픈채팅 URL (채널 미게시, ephemeral 전용) (010)
     openchat_gate_role_id       BIGINT,              -- 오픈채팅 게이트 통과 역할 (010)
     kakao_invite_code           TEXT,                -- 카카오 유입용 초대코드 (010)
-    entry_marker_role_id        BIGINT               -- 카카오 유입자 마커 역할 (010)
+    entry_marker_role_id        BIGINT,              -- 카카오 유입자 마커 역할 (010)
+    openchat_approval_required  SMALLINT NOT NULL DEFAULT 0,  -- 오픈채팅 운영자 승인제 on/off (012)
+    openchat_request_channel_id BIGINT               -- 오픈채팅 신청을 받을 운영자 채널 (012)
 );
 
 -- ─── 활동 경고 누적 ──────────────────────────────
@@ -294,6 +296,20 @@ CREATE INDEX IF NOT EXISTS idx_member_entry_route
 CREATE INDEX IF NOT EXISTS idx_sticky_messages_enabled
     ON sticky_messages (guild_id)
     WHERE enabled = TRUE;
+
+-- ─── 오픈채팅 입장 신청 (012) ───────────────────
+CREATE TABLE IF NOT EXISTS openchat_requests (
+    id            BIGSERIAL   PRIMARY KEY,
+    guild_id      BIGINT      NOT NULL,
+    user_id       BIGINT      NOT NULL,
+    status        TEXT        NOT NULL DEFAULT 'pending',  -- pending | approved | rejected
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reviewed_by   BIGINT,
+    reviewed_at   TIMESTAMPTZ,
+    review_msg_id BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_openchat_requests_pending
+    ON openchat_requests (guild_id, status);
 ```
 
 ### 2-4. 테이블 설명
@@ -316,6 +332,7 @@ CREATE INDEX IF NOT EXISTS idx_sticky_messages_enabled
 | `blacklist` | 디스코드 ID 기반 차단 목록 (사유·등록자·네이티브밴 여부) |
 | `member_entry` | 멤버 입장 경로 기록 (kakao/discord/vanity/unknown) |
 | `sticky_messages` | 채널별 스티키 공지 (내용·현재 메시지 ID·on/off) |
+| `openchat_requests` | 오픈채팅 입장 신청 (승인제 ON일 때 운영자 승인 대기열) |
 
 ### 2-5. 마이그레이션 (기존 설치 업데이트)
 
@@ -334,6 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_sticky_messages_enabled
 | `009_blacklist.sql` | `blacklist` 테이블 + `blacklist_ban_on_join`·`blacklist_notify` 컬럼 |
 | `010_entry_dual_security.sql` | `member_entry` 테이블 + 오픈채팅/카카오 관련 4개 컬럼 |
 | `011_sticky_messages.sql` | `sticky_messages` 테이블 (스티키 공지) |
+| `012_openchat_approval.sql` | `openchat_requests` 테이블 + 오픈채팅 운영자 승인제 컬럼 2개 |
 
 > `002~005`, `007~011` 은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문이라 **재실행해도 안전**해요.
 > ⚠️ 단 `006` 은 값 변환(`÷6`)이 들어 있어 **한 번만 실행**해야 해요. 다시 실행하면 포인트가 또 나눠져요. (각 마이그레이션은 순서대로 1회씩만 실행하면 됩니다.)
@@ -418,7 +436,8 @@ discord-party-bot/
 │   ├── 008_spectators.sql
 │   ├── 009_blacklist.sql
 │   ├── 010_entry_dual_security.sql
-│   └── 011_sticky_messages.sql
+│   ├── 011_sticky_messages.sql
+│   └── 012_openchat_approval.sql
 ├── requirements.txt
 ├── Procfile                # Railway 실행 설정 (worker: python bot.py)
 ├── runtime.txt

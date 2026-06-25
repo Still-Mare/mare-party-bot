@@ -59,10 +59,13 @@ class VerifyView(ui.View):
         '본인에게만 보이는(ephemeral)' 메시지로 전달한다. URL은 어떤 채널에도 게시되지
         않으므로 외부 채팅 유도 링크로 인한 초대코드 정지 위험이 없다.
         """
+        # 먼저 ACK (DB 조회가 3초를 넘겨도 인터랙션이 만료되지 않게)
+        await interaction.response.defer(ephemeral=True)
+
         settings = await db.get_settings(interaction.guild.id)
         url = settings.get("openchat_url")
         if not url:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "아직 오픈채팅이 설정되지 않았어요. 관리자에게 문의해주세요.", ephemeral=True
             )
             return
@@ -72,25 +75,63 @@ class VerifyView(ui.View):
         if verified_role_id:
             vrole = interaction.guild.get_role(verified_role_id)
             if vrole and vrole not in interaction.user.roles:
-                await interaction.response.send_message(
+                await interaction.followup.send(
                     "먼저 위의 **인증하기** 버튼으로 인증을 완료해주세요. (이중 보안)",
                     ephemeral=True,
                 )
                 return
 
-        # 2차 게이트 통과 역할 부여 (선택)
         gate_role_id = settings.get("openchat_gate_role_id")
-        if gate_role_id:
-            grole = interaction.guild.get_role(gate_role_id)
-            if grole and grole not in interaction.user.roles:
-                try:
-                    await interaction.user.add_roles(grole, reason="오픈채팅 게이트 통과")
-                except discord.HTTPException:
-                    pass
-
-        await interaction.response.send_message(
+        user = interaction.user
+        url_msg = (
             f"💬 **오픈채팅 입장 링크**\n{url}\n\n"
-            "(이 메시지는 회원님에게만 보여요. 링크는 외부에 공유하지 말아주세요.)",
+            "(이 메시지는 회원님에게만 보여요. 링크는 외부에 공유하지 말아주세요.)"
+        )
+
+        # ── 승인제 OFF: 즉시 역할 부여 + URL (기존 동작) ──
+        if not settings.get("openchat_approval_required"):
+            note = ""
+            if gate_role_id:
+                grole = interaction.guild.get_role(gate_role_id)
+                if grole and grole not in user.roles:
+                    try:
+                        await user.add_roles(grole, reason="오픈채팅 게이트 통과")
+                    except discord.HTTPException:
+                        note = "\n⚠️ 역할 부여에 실패했어요 — 운영진에게 문의해주세요."
+            await interaction.followup.send(url_msg + note, ephemeral=True)
+            return
+
+        # ── 승인제 ON: 신청 → 운영자 승인 후 역할 ──
+        if gate_role_id and any(r.id == gate_role_id for r in user.roles):
+            await interaction.followup.send(
+                f"이미 오픈채팅 승인이 완료됐어요.\n{url_msg}", ephemeral=True
+            )
+            return
+
+        request_id = await db.create_openchat_request(interaction.guild.id, user.id)
+        if request_id is None:
+            await interaction.followup.send(
+                "이미 신청하셨어요. 운영진 승인을 기다려주세요.\n"
+                f"아직 카톡 오픈채팅에 안 들어가셨다면 지금 입장해두세요:\n{url_msg}",
+                ephemeral=True,
+            )
+            return
+
+        from cogs.entry_tracking import post_openchat_request
+        posted = await post_openchat_request(interaction.guild, user, request_id, settings)
+        if not posted:
+            await interaction.followup.send(
+                "신청은 접수했지만 **운영자 신청 채널이 설정되지 않아** 알림을 못 보냈어요. "
+                "관리자에게 '신청 받을 채널' 설정을 요청해주세요.\n"
+                f"{url_msg}",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            "✅ 오픈채팅 입장 신청을 접수했어요!\n"
+            f"💬 먼저 이 주소로 카카오톡 오픈채팅에 입장해주세요:\n{url}\n\n"
+            "운영진이 입장을 확인하고 승인하면 역할이 부여돼요. 잠시만 기다려주세요!",
             ephemeral=True,
         )
 

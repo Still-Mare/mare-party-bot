@@ -111,6 +111,32 @@ class NicknameModal(ui.Modal, title="닉네임 변경"):
         await interaction.followup.send(f"닉네임을 **{shown}**(으)로 바꿨어요!", ephemeral=True)
 
 
+# ───────── 닉네임 변경 전용 패널 (영구) ─────────
+class NicknamePanelView(ui.View):
+    """특정 채널에 설치하는 닉네임 변경 버튼 패널 (영구 View)."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(label="닉네임 변경하기", emoji="✏️",
+               style=discord.ButtonStyle.primary, custom_id="nickname:open")
+    async def open(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.send_modal(NicknameModal())
+
+
+def build_nickname_panel_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="✏️ 닉네임 변경",
+        description=(
+            "아래 **닉네임 변경하기** 버튼을 누르면 원하는 닉네임으로 바꿀 수 있어요.\n"
+            "비워서 보내면 원래 이름으로 초기화돼요.\n"
+            f"(어뷰징 방지를 위해 {_NICK_COOLDOWN_SECS}초에 한 번만 바꿀 수 있어요.)"
+        ),
+        color=0x5865F2,
+    )
+    embed.set_footer(text="변경 내역은 운영진이 확인할 수 있어요.")
+    return embed
+
+
 # ───────── 관리자: 닉네임 변경 이력 조회 ─────────
 def build_nick_history_embed(guild, target: discord.Member, rows: list) -> discord.Embed:
     embed = discord.Embed(
