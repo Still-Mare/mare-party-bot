@@ -100,6 +100,12 @@ class ActivityPanelView(ui.View):
             embed=embed, view=LeaveStartView(), ephemeral=True
         )
 
+    @ui.button(label="닉네임 변경", emoji="✏️",
+               style=discord.ButtonStyle.secondary, custom_id="panel:nickname")
+    async def nickname(self, interaction: discord.Interaction, button: ui.Button):
+        from cogs.nicknames import NicknameModal
+        await interaction.response.send_modal(NicknameModal())
+
 
 # 하위 호환용 (예전 영구 View 등록 코드가 이 이름 참조)
 class ControlPanelView(ui.View):
@@ -216,6 +222,14 @@ class ChannelSettingSelect(ui.Select):
                     label="모집글 채널 지정", value="set_recruit", emoji="📌",
                     description="파티 모집글이 항상 게시될 전용 채널을 지정해요",
                 ),
+                discord.SelectOption(
+                    label="닉네임 로그 채널 지정", value="set_nick_log", emoji="✏️",
+                    description="닉네임 변경 로그를 남길 관리자 채널을 지정해요",
+                ),
+                discord.SelectOption(
+                    label="스티키 공지 설정", value="set_sticky", emoji="📌",
+                    description="채널 하단에 고정되는 운영자 공지를 설정/수정/해제해요",
+                ),
             ],
         )
 
@@ -251,6 +265,19 @@ class ChannelSettingSelect(ui.Select):
                 "설정하면 파티 모집 버튼이 어느 채널에 있든 모집글은 이 채널에 올라가요.",
                 view=RecruitChannelSelectView(), ephemeral=True,
             )
+        elif value == "set_nick_log":
+            from cogs.nicknames import NickLogChannelSelectView
+            await interaction.response.send_message(
+                "닉네임 변경 로그를 남길 채널을 선택하세요. (관리자만 보이는 채널 권장)",
+                view=NickLogChannelSelectView(), ephemeral=True,
+            )
+        elif value == "set_sticky":
+            from cogs.sticky import StickyManageView
+            await interaction.response.send_message(
+                "📌 **스티키 공지** — 설정한 채널 맨 아래에 운영자 공지를 항상 고정해요.\n"
+                "아래 버튼으로 설정·수정하거나 끌 수 있어요.",
+                view=StickyManageView(), ephemeral=True,
+            )
 
 
 class RoleStatsSelect(ui.Select):
@@ -272,6 +299,18 @@ class RoleStatsSelect(ui.Select):
                 discord.SelectOption(
                     label="주간 랭킹 초기화", value="reset_week", emoji="🔄",
                     description="이번 주 음성 이용 시간 통계를 초기화해요",
+                ),
+                discord.SelectOption(
+                    label="블랙리스트 관리", value="blacklist", emoji="🚫",
+                    description="유저 ID로 차단 추가·해제, 차단 모드 전환 (나간 유저도 가능)",
+                ),
+                discord.SelectOption(
+                    label="입장/오픈채팅 설정", value="entry_openchat", emoji="🔐",
+                    description="오픈채팅 URL·카카오 코드·게이트/마커 역할·유입 통계",
+                ),
+                discord.SelectOption(
+                    label="닉네임 변경 이력 보기", value="nick_history", emoji="✏️",
+                    description="특정 유저의 닉네임 변경 이력을 조회해요",
                 ),
             ],
         )
@@ -295,6 +334,26 @@ class RoleStatsSelect(ui.Select):
             await interaction.response.defer(ephemeral=True)
             await db.reset_week(interaction.guild.id)
             await interaction.followup.send("이번 주 음성 랭킹을 초기화했어요.", ephemeral=True)
+        elif value == "blacklist":
+            from cogs.blacklist import BlacklistManageView
+            await interaction.response.send_message(
+                "🚫 **블랙리스트 관리** — 이미 서버를 나간 유저도 ID로 등록해 재입장을 막아요.",
+                view=BlacklistManageView(), ephemeral=True,
+            )
+        elif value == "entry_openchat":
+            from cogs.entry_tracking import EntrySettingsView
+            await interaction.response.send_message(
+                "🔐 **입장/오픈채팅 설정** — 카카오·디스코드 유입 구분과 오픈채팅 이중보안 게이트를 설정해요.\n"
+                "오픈채팅 링크는 채널에 게시되지 않고, 인증을 마친 유저에게만 본인에게 보이게(ephemeral) 전달돼요.\n"
+                "게이트 버튼은 `/인증패널`로 설치한 인증 패널의 **[오픈채팅 입장하기]** 버튼이에요.",
+                view=EntrySettingsView(), ephemeral=True,
+            )
+        elif value == "nick_history":
+            from cogs.nicknames import NickHistoryUserSelectView
+            await interaction.response.send_message(
+                "닉네임 변경 이력을 볼 유저를 선택하세요.",
+                view=NickHistoryUserSelectView(), ephemeral=True,
+            )
 
 
 class ActivityReviewSelect(ui.Select):

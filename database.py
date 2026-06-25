@@ -20,6 +20,13 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "panel_manager_role", "verified_role_id", "last_reviewed_at",
     "recruit_post_channel_id", "points_per_10min",
     "points_excluded_channel_id",
+    # 007 셀프 닉네임
+    "nickname_log_channel_id",
+    # 009 블랙리스트
+    "blacklist_ban_on_join", "blacklist_notify",
+    # 010 입장 경로 + 오픈채팅 게이트
+    "openchat_url", "openchat_gate_role_id",
+    "kakao_invite_code", "entry_marker_role_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
@@ -342,7 +349,11 @@ async def get_settings(guild_id):
         r = await con.fetchrow(
             """SELECT voice_category_id, archive_channel_id, review_log_channel,
                       exempt_role_id, min_seconds, auto_kick_enabled, panel_manager_role,
-                      verified_role_id, recruit_post_channel_id
+                      verified_role_id, recruit_post_channel_id,
+                      nickname_log_channel_id,
+                      blacklist_ban_on_join, blacklist_notify,
+                      openchat_url, openchat_gate_role_id,
+                      kakao_invite_code, entry_marker_role_id
                FROM guild_settings WHERE guild_id = $1""",
             guild_id,
         )
@@ -353,6 +364,10 @@ async def get_settings(guild_id):
             "min_seconds": 10800, "auto_kick_enabled": 0,
             "panel_manager_role": None, "verified_role_id": None,
             "recruit_post_channel_id": None,
+            "nickname_log_channel_id": None,
+            "blacklist_ban_on_join": 0, "blacklist_notify": 1,
+            "openchat_url": None, "openchat_gate_role_id": None,
+            "kakao_invite_code": None, "entry_marker_role_id": None,
         }
     return {
         "voice_category_id": r["voice_category_id"],
@@ -364,6 +379,13 @@ async def get_settings(guild_id):
         "panel_manager_role": r["panel_manager_role"],
         "verified_role_id": r["verified_role_id"],
         "recruit_post_channel_id": r["recruit_post_channel_id"],
+        "nickname_log_channel_id": r["nickname_log_channel_id"],
+        "blacklist_ban_on_join": r["blacklist_ban_on_join"],
+        "blacklist_notify": r["blacklist_notify"],
+        "openchat_url": r["openchat_url"],
+        "openchat_gate_role_id": r["openchat_gate_role_id"],
+        "kakao_invite_code": r["kakao_invite_code"],
+        "entry_marker_role_id": r["entry_marker_role_id"],
     }
 
 
@@ -685,3 +707,273 @@ async def get_points_excluded_channel(guild_id: int) -> int | None:
 async def set_points_excluded_channel(guild_id: int, channel_id: int | None):
     """포인트 미지급 채널을 설정한다. None이면 해제."""
     await _upsert_setting(guild_id, "points_excluded_channel_id", channel_id)
+
+
+# ─────────────────────── 007 셀프 닉네임 ───────────────────────
+async def set_nickname_log_channel(guild_id: int, channel_id: int | None):
+    await _upsert_setting(guild_id, "nickname_log_channel_id", channel_id)
+
+
+async def log_nickname_change(guild_id: int, user_id: int, old_nick, new_nick, changed_by: int):
+    """닉네임 변경 이력 1건 기록."""
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO nickname_history (guild_id, user_id, old_nick, new_nick, changed_by)
+               VALUES ($1, $2, $3, $4, $5)""",
+            guild_id, user_id, old_nick, new_nick, changed_by,
+        )
+
+
+async def get_nickname_history(guild_id: int, user_id: int, limit: int = 15) -> list:
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT old_nick, new_nick, changed_by, changed_at
+               FROM nickname_history
+               WHERE guild_id = $1 AND user_id = $2
+               ORDER BY changed_at DESC LIMIT $3""",
+            guild_id, user_id, limit,
+        )
+    return [
+        {"old_nick": r["old_nick"], "new_nick": r["new_nick"],
+         "changed_by": r["changed_by"], "changed_at": r["changed_at"]}
+        for r in rows
+    ]
+
+
+# ─────────────────────── 008 관전자 ───────────────────────
+async def add_spectator(recruit_id: int, user_id: int, original_nick) -> bool:
+    """관전자 등록. 신규면 True, 이미 관전 중이면 False."""
+    async with _get_pool().acquire() as con:
+        result = await con.execute(
+            """INSERT INTO spectators (recruit_id, user_id, original_nick)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (recruit_id, user_id) DO NOTHING""",
+            recruit_id, user_id, original_nick,
+        )
+    return result.endswith("1")
+
+
+async def remove_spectator(recruit_id: int, user_id: int):
+    """관전 해제. (존재했는지, 저장된 원본 닉) 튜플 반환. 없으면 (False, None)."""
+    async with _get_pool().acquire() as con:
+        row = await con.fetchrow(
+            """DELETE FROM spectators
+               WHERE recruit_id = $1 AND user_id = $2
+               RETURNING original_nick""",
+            recruit_id, user_id,
+        )
+    return (True, row["original_nick"]) if row else (False, None)
+
+
+async def list_spectators(recruit_id: int) -> list:
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT user_id, original_nick FROM spectators
+               WHERE recruit_id = $1 ORDER BY joined_at""",
+            recruit_id,
+        )
+    return [{"user_id": r["user_id"], "original_nick": r["original_nick"]} for r in rows]
+
+
+async def is_spectator(recruit_id: int, user_id: int) -> bool:
+    async with _get_pool().acquire() as con:
+        r = await con.fetchval(
+            "SELECT 1 FROM spectators WHERE recruit_id = $1 AND user_id = $2",
+            recruit_id, user_id,
+        )
+    return r is not None
+
+
+async def get_spectating_recruit_ids(guild_id: int, user_id: int) -> list:
+    """이 유저가 현재 관전 중인 '열린' 모집 ID 목록 (셀프 닉변 시 접두사 재적용용)."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT s.recruit_id FROM spectators s
+               JOIN recruits r ON r.id = s.recruit_id
+               WHERE r.guild_id = $1 AND r.status = 'open' AND s.user_id = $2""",
+            guild_id, user_id,
+        )
+    return [r["recruit_id"] for r in rows]
+
+
+async def update_spectator_original_nick(guild_id: int, user_id: int, new_base):
+    """셀프 닉변 시, 열린 모집의 관전 레코드 원본 닉을 새 베이스로 갱신."""
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """UPDATE spectators SET original_nick = $3
+               WHERE user_id = $2 AND recruit_id IN (
+                   SELECT id FROM recruits WHERE guild_id = $1 AND status = 'open'
+               )""",
+            guild_id, user_id, new_base,
+        )
+
+
+# ─────────────────────── 009 블랙리스트 ───────────────────────
+async def add_blacklist(guild_id: int, user_id: int, reason, added_by: int, native_ban: int = 0):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO blacklist (guild_id, user_id, reason, added_by, native_ban)
+               VALUES ($1, $2, $3, $4, $5)
+               ON CONFLICT (guild_id, user_id) DO UPDATE
+               SET reason = $3, added_by = $4, native_ban = $5, created_at = now()""",
+            guild_id, user_id, reason, added_by, native_ban,
+        )
+
+
+async def remove_blacklist(guild_id: int, user_id: int):
+    """해제. 등록돼 있었으면 native_ban 값(0/1) 반환, 아니면 None."""
+    async with _get_pool().acquire() as con:
+        row = await con.fetchrow(
+            """DELETE FROM blacklist WHERE guild_id = $1 AND user_id = $2
+               RETURNING native_ban""",
+            guild_id, user_id,
+        )
+    return row["native_ban"] if row else None
+
+
+async def is_blacklisted(guild_id: int, user_id: int) -> bool:
+    async with _get_pool().acquire() as con:
+        r = await con.fetchval(
+            "SELECT 1 FROM blacklist WHERE guild_id = $1 AND user_id = $2",
+            guild_id, user_id,
+        )
+    return r is not None
+
+
+async def get_blacklist_entry(guild_id: int, user_id: int):
+    async with _get_pool().acquire() as con:
+        r = await con.fetchrow(
+            """SELECT user_id, reason, added_by, native_ban, created_at
+               FROM blacklist WHERE guild_id = $1 AND user_id = $2""",
+            guild_id, user_id,
+        )
+    if not r:
+        return None
+    return {"user_id": r["user_id"], "reason": r["reason"], "added_by": r["added_by"],
+            "native_ban": r["native_ban"], "created_at": r["created_at"]}
+
+
+async def list_blacklist(guild_id: int, limit: int = 25) -> list:
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT user_id, reason, added_by, native_ban, created_at
+               FROM blacklist WHERE guild_id = $1
+               ORDER BY created_at DESC LIMIT $2""",
+            guild_id, limit,
+        )
+    return [
+        {"user_id": r["user_id"], "reason": r["reason"], "added_by": r["added_by"],
+         "native_ban": r["native_ban"], "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+async def set_blacklist_ban_on_join(guild_id: int, enabled: bool):
+    await _upsert_setting(guild_id, "blacklist_ban_on_join", 1 if enabled else 0)
+
+
+async def set_blacklist_notify(guild_id: int, enabled: bool):
+    await _upsert_setting(guild_id, "blacklist_notify", 1 if enabled else 0)
+
+
+# ─────────────────────── 010 입장 경로 + 오픈채팅 ───────────────────────
+async def record_member_entry(guild_id: int, user_id: int, invite_code, route_label: str):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO member_entry (guild_id, user_id, invite_code, route_label, joined_at)
+               VALUES ($1, $2, $3, $4, now())
+               ON CONFLICT (guild_id, user_id) DO UPDATE
+               SET invite_code = $3, route_label = $4, joined_at = now()""",
+            guild_id, user_id, invite_code, route_label,
+        )
+
+
+async def get_route_stats(guild_id: int) -> dict:
+    """경로별 유입 수 집계. {'kakao': n, 'discord': m, ...}"""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT route_label, COUNT(*) AS cnt FROM member_entry
+               WHERE guild_id = $1 GROUP BY route_label""",
+            guild_id,
+        )
+    return {r["route_label"]: r["cnt"] for r in rows}
+
+
+async def set_openchat_url(guild_id: int, url):
+    await _upsert_setting(guild_id, "openchat_url", url)
+
+
+async def set_openchat_gate_role(guild_id: int, role_id):
+    await _upsert_setting(guild_id, "openchat_gate_role_id", role_id)
+
+
+async def set_kakao_invite_code(guild_id: int, code):
+    await _upsert_setting(guild_id, "kakao_invite_code", code)
+
+
+async def set_entry_marker_role(guild_id: int, role_id):
+    await _upsert_setting(guild_id, "entry_marker_role_id", role_id)
+
+
+# ─────────────────────── 011 스티키 공지 ───────────────────────
+async def upsert_sticky(guild_id: int, channel_id: int, title, content, image_url, created_by: int):
+    """스티키 설정/수정. enabled=TRUE 로 켜고 last_message_id 는 유지(이전 메시지 삭제용)."""
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO sticky_messages
+                   (guild_id, channel_id, title, content, image_url, enabled, created_by, updated_at)
+               VALUES ($1, $2, $3, $4, $5, TRUE, $6, now())
+               ON CONFLICT (guild_id, channel_id) DO UPDATE
+               SET title = $3, content = $4, image_url = $5,
+                   enabled = TRUE, created_by = $6, updated_at = now()""",
+            guild_id, channel_id, title, content, image_url, created_by,
+        )
+
+
+async def get_sticky(guild_id: int, channel_id: int):
+    async with _get_pool().acquire() as con:
+        r = await con.fetchrow(
+            """SELECT guild_id, channel_id, title, content, image_url,
+                      last_message_id, enabled
+               FROM sticky_messages WHERE guild_id = $1 AND channel_id = $2""",
+            guild_id, channel_id,
+        )
+    if not r:
+        return None
+    return {"guild_id": r["guild_id"], "channel_id": r["channel_id"],
+            "title": r["title"], "content": r["content"], "image_url": r["image_url"],
+            "last_message_id": r["last_message_id"], "enabled": r["enabled"]}
+
+
+async def set_sticky_message_id(guild_id: int, channel_id: int, message_id):
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """UPDATE sticky_messages SET last_message_id = $3
+               WHERE guild_id = $1 AND channel_id = $2""",
+            guild_id, channel_id, message_id,
+        )
+
+
+async def disable_sticky(guild_id: int, channel_id: int) -> bool:
+    """스티키 끄기. 존재했으면 True."""
+    async with _get_pool().acquire() as con:
+        result = await con.execute(
+            """UPDATE sticky_messages SET enabled = FALSE, updated_at = now()
+               WHERE guild_id = $1 AND channel_id = $2""",
+            guild_id, channel_id,
+        )
+    return result.endswith("1")
+
+
+async def list_enabled_stickies(guild_id: int) -> list:
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT channel_id, title, content, last_message_id
+               FROM sticky_messages WHERE guild_id = $1 AND enabled = TRUE""",
+            guild_id,
+        )
+    return [
+        {"channel_id": r["channel_id"], "title": r["title"],
+         "content": r["content"], "last_message_id": r["last_message_id"]}
+        for r in rows
+    ]

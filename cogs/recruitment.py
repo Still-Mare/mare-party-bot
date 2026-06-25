@@ -13,6 +13,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import nick_util
 
 log = logging.getLogger("party-bot")
 
@@ -25,6 +26,7 @@ def build_recruit_embed(
     participant_members: list,
     host_member,
     total_count: int | None = None,
+    spectator_members: list | None = None,
 ) -> discord.Embed:
     """
     모집글 임베드를 만든다. 참가자 명단 포함.
@@ -56,6 +58,13 @@ def build_recruit_embed(
     else:
         roster = "아직 참가자가 없어요."
     embed.add_field(name="참가자", value=roster, inline=False)
+
+    if spectator_members:
+        spec_lines = [
+            f"{i}. {nick_util.strip_prefix(m.display_name)}"
+            for i, m in enumerate(spectator_members, 1)
+        ]
+        embed.add_field(name="👀 관전자", value="\n".join(spec_lines), inline=False)
 
     if host_member:
         embed.set_footer(text=f"모집자: {host_member.display_name}")
@@ -150,9 +159,92 @@ async def refresh_recruit_message(bot, recruit_id: int):
     members = [m for uid in user_ids if (m := guild.get_member(uid))]
     host = guild.get_member(recruit["host_id"])
 
-    embed = build_recruit_embed(recruit, members, host, total_count=len(user_ids))
+    spec_rows = await db.list_spectators(recruit_id)
+    spectators = [m for s in spec_rows if (m := guild.get_member(s["user_id"]))]
+
+    embed = build_recruit_embed(
+        recruit, members, host,
+        total_count=len(user_ids), spectator_members=spectators,
+    )
     view = None if recruit["status"] == "closed" else RecruitView(recruit_id)
     await msg.edit(embed=embed, view=view)
+
+
+# ───────── 관전 처리 ─────────
+async def start_spectate(guild, recruit, member) -> tuple[bool, str]:
+    """
+    관전 시작. (성공 여부, 안내 메시지) 반환.
+    - 이미 참가자(플레이어)면 거부.
+    - 닉네임 '관전 ' 접두사는 권한이 있을 때만 부여 (실패해도 관전 자체는 유지).
+    - 음성방이 이미 있으면 connect 권한을 추가해 정원초과로도 입장 가능하게 한다.
+    """
+    rid = recruit["id"]
+    if member.id in await db.list_participants(rid):
+        return (False, "이미 참가(플레이) 중이에요. 관전이 아니라 플레이로 입장돼요.")
+
+    # 원본 닉(접두사 제외). 닉이 없으면 None → 복원 시 username 으로 초기화되어
+    # '닉 없음' 상태가 그대로 보존된다.
+    base = nick_util.strip_prefix(member.nick)
+    added = await db.add_spectator(rid, member.id, base)
+    if not added:
+        return (False, "이미 관전 중이에요.")
+
+    nick_note = ""
+    if nick_util.can_edit_nick(member):
+        ok, _ = await nick_util.set_nick(
+            member, nick_util.with_prefix(base, member), reason="관전 표시"
+        )
+        if not ok:
+            nick_note = " (닉네임 표시는 못 바꿨어요)"
+    else:
+        nick_note = " (닉네임 표시는 못 바꿨어요)"
+
+    if recruit["voice_channel_id"]:
+        vc = guild.get_channel(recruit["voice_channel_id"])
+        if vc:
+            try:
+                await vc.set_permissions(member, connect=True, reason="관전 입장 허용")
+            except discord.HTTPException:
+                pass
+    return (True, "관전으로 등록됐어요! 음성방이 열리면 정원과 상관없이 입장할 수 있어요." + nick_note)
+
+
+async def stop_spectate(guild, recruit, member) -> bool:
+    """관전 종료 + 닉 복원 + 음성방 권한 회수. 관전 중이 아니었으면 False."""
+    rid = recruit["id"]
+    existed, original = await db.remove_spectator(rid, member.id)
+    if not existed:
+        return False
+
+    # 다른 모집을 동시 관전 중이 아니고, 현재 닉이 관전 접두사면 원본으로 복원
+    others = await db.get_spectating_recruit_ids(guild.id, member.id)
+    if not others and member.nick and member.nick.startswith(nick_util.SPECTATOR_PREFIX):
+        if nick_util.can_edit_nick(member):
+            await nick_util.set_nick(member, original, reason="관전 종료")
+
+    if recruit["voice_channel_id"]:
+        vc = guild.get_channel(recruit["voice_channel_id"])
+        if vc:
+            try:
+                await vc.set_permissions(member, overwrite=None, reason="관전 종료")
+            except discord.HTTPException:
+                pass
+    return True
+
+
+async def cleanup_spectators(guild, recruit):
+    """모집 종료/아카이브 시 모든 관전자의 닉을 복원하고 관전 레코드를 제거한다."""
+    rid = recruit["id"]
+    for s in await db.list_spectators(rid):
+        uid = s["user_id"]
+        _, original = await db.remove_spectator(rid, uid)
+        member = guild.get_member(uid)
+        if not member:
+            continue
+        others = [r for r in await db.get_spectating_recruit_ids(guild.id, uid) if r != rid]
+        if not others and member.nick and member.nick.startswith(nick_util.SPECTATOR_PREFIX):
+            if nick_util.can_edit_nick(member):
+                await nick_util.set_nick(member, original, reason="모집 종료 - 관전 정리")
 
 
 # ───────── 모집 작성 모달 ─────────
@@ -270,6 +362,8 @@ class RecruitView(ui.View):
         self.leave_btn.custom_id = f"recruit_leave:{recruit_id}"
         self.voice_btn.custom_id = f"recruit_voice:{recruit_id}"
         self.close_btn.custom_id = f"recruit_close:{recruit_id}"
+        self.spectate_btn.custom_id = f"recruit_spectate:{recruit_id}"
+        self.unspectate_btn.custom_id = f"recruit_unspectate:{recruit_id}"
 
     @ui.button(label="참가", emoji="✋", style=discord.ButtonStyle.success, row=0)
     async def join_btn(self, interaction: discord.Interaction, button: ui.Button):
@@ -289,6 +383,9 @@ class RecruitView(ui.View):
         # 참가 성공 — 역할 부여 (recruit 재조회로 최신 temp_role_id 반영)
         recruit = await db.get_recruit(self.recruit_id)
         if recruit:
+            # 관전 중이었다면 관전 해제 후 플레이어로 전환 (참가+관전 동시 상태 방지)
+            if await db.is_spectator(self.recruit_id, interaction.user.id):
+                await stop_spectate(interaction.guild, recruit, interaction.user)
             await grant_temp_role(interaction.guild, recruit, interaction.user)
 
         await interaction.followup.send("참가했어요!", ephemeral=True)
@@ -336,8 +433,9 @@ class RecruitView(ui.View):
         if settings["voice_category_id"]:
             category = interaction.guild.get_channel(settings["voice_category_id"])
 
-        # 참가자만 접근 가능하게 권한 설정
+        # 참가자 + 관전자만 접근 가능하게 권한 설정
         user_ids = await db.list_participants(self.recruit_id)
+        spec_rows = await db.list_spectators(self.recruit_id)
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(connect=False),
             interaction.guild.me: discord.PermissionOverwrite(
@@ -348,12 +446,18 @@ class RecruitView(ui.View):
             member = interaction.guild.get_member(uid)
             if member:
                 overwrites[member] = discord.PermissionOverwrite(connect=True)
+        for s in spec_rows:
+            member = interaction.guild.get_member(s["user_id"])
+            if member:
+                overwrites[member] = discord.PermissionOverwrite(connect=True)
 
         try:
             vc = await interaction.guild.create_voice_channel(
                 name=f"🎮 {recruit['game_name']} 파티",
                 category=category,
-                user_limit=recruit["max_players"],
+                # user_limit=0(무제한): 관전자 정원초과 입장 허용.
+                # (Discord는 user_limit이 개별 connect 권한보다 우선해 막으므로 0으로 둔다)
+                user_limit=0,
                 overwrites=overwrites,
                 reason=f"모집 #{self.recruit_id} 음성방",
             )
@@ -422,6 +526,32 @@ class RecruitView(ui.View):
             )
             await refresh_recruit_message(interaction.client, self.recruit_id)
 
+    @ui.button(label="관전", emoji="👀", style=discord.ButtonStyle.secondary, row=2)
+    async def spectate_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        recruit = await db.get_recruit(self.recruit_id)
+        if not recruit or recruit["status"] != "open":
+            await interaction.followup.send("마감된 모집이에요.", ephemeral=True)
+            return
+        ok, msg = await start_spectate(interaction.guild, recruit, interaction.user)
+        await interaction.followup.send(msg, ephemeral=True)
+        if ok:
+            await refresh_recruit_message(interaction.client, self.recruit_id)
+
+    @ui.button(label="관전 종료", emoji="🚪", style=discord.ButtonStyle.secondary, row=2)
+    async def unspectate_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        recruit = await db.get_recruit(self.recruit_id)
+        if not recruit:
+            await interaction.followup.send("모집 정보를 찾을 수 없어요.", ephemeral=True)
+            return
+        stopped = await stop_spectate(interaction.guild, recruit, interaction.user)
+        await interaction.followup.send(
+            "관전을 종료했어요." if stopped else "관전 중이 아니었어요.", ephemeral=True
+        )
+        if stopped:
+            await refresh_recruit_message(interaction.client, self.recruit_id)
+
 
 class Recruitment(commands.Cog):
     def __init__(self, bot):
@@ -478,6 +608,9 @@ async def archive_recruit_to_channel(
             await msg.delete()
         except discord.NotFound:
             pass
+
+    # 관전자 닉 복원 + 관전 레코드 정리
+    await cleanup_spectators(guild, recruit)
 
     # 임시 역할 삭제 (모든 보유자에게서 자동 제거됨)
     await delete_temp_role(guild, recruit)

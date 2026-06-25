@@ -37,6 +37,9 @@ class PartyBot(commands.Bot):
     async def setup_hook(self):
         await db.init_db()
 
+        # 입장 경로 추적용 초대코드 사용횟수 캐시 (entry_tracking 이 채움)
+        self.invite_cache = {}
+
         # Cog 로드
         await self.load_extension("cogs.control_panel")
         await self.load_extension("cogs.recruitment")
@@ -47,6 +50,10 @@ class PartyBot(commands.Bot):
         await self.load_extension("cogs.suggestions")
         await self.load_extension("cogs.leave_notices")
         await self.load_extension("cogs.point_shop")
+        await self.load_extension("cogs.nicknames")       # 셀프 닉네임 변경
+        await self.load_extension("cogs.blacklist")        # 블랙리스트 (on_member_join 차단)
+        await self.load_extension("cogs.entry_tracking")   # 입장 경로 구분 + 오픈채팅 게이트 설정
+        await self.load_extension("cogs.sticky")           # 스티키 공지
 
         # 영구 View 재등록 (봇 재시작 후에도 버튼이 동작하도록)
         from cogs.control_panel import (
