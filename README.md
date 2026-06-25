@@ -20,6 +20,11 @@
 | 🔓 규칙 인증 | 버튼 클릭으로 인증 역할 자동 지급 |
 | 📨 익명 건의함 | 버튼 → 모달로 익명 건의 → 관리자 채널 게시. 작성자는 서버 주인만 확인 가능 |
 | 🕊️ 잠수 신고 | 활동검토 면제 신청 (3일/1주/2주/1개월 또는 날짜 직접 입력). 관리자 승인식 |
+| 🔐 입장 이중보안 | 카카오 오픈채팅 URL을 채널에 안 올리고, 인증 통과자에게만 본인에게만 보이는 메시지로 전달 → 초대코드 정지 회피. 카카오/디스코드 유입 경로 자동 구분 |
+| 🚫 블랙리스트 | 디스코드 고유 ID 기반 차단. 이미 나간 유저도 ID로 등록해 재입장 차단(강퇴/밴 토글, 네이티브 밴 옵션) |
+| 👀 관전 | 파티 정원이 차도 관전자는 음성방 입장 가능, 닉네임 앞에 "관전 " 표시 (종료 시 자동 복원) |
+| ✏️ 셀프 닉네임 | 서버가 별명 변경을 막아둬도 봇이 대신 변경. old→new 변경 이력 기록·조회 |
+| 📌 스티키 공지 | 운영자 공지를 채널 맨 아래에 항상 고정 (새 글이 올라오면 자동 재게시) |
 
 ---
 
@@ -32,12 +37,14 @@
    - ✅ **Presence Intent** 는 불필요, 끄세요
 4. 왼쪽 **OAuth2 → URL Generator**:
    - Scopes: `bot`, `applications.commands`
-   - Bot Permissions: `Manage Roles`, `Manage Channels`, `Move Members`, `Kick Members`, `Send Messages`, `Embed Links`, `Read Message History`, `Use Slash Commands`
+   - Bot Permissions: `Manage Roles`, `Manage Channels`, `Move Members`, `Kick Members`, `Send Messages`, `Embed Links`, `Read Message History`, `Use Slash Commands`, `Manage Nicknames`, `Manage Server`, `Manage Messages`, `Ban Members`
    - 생성된 URL로 봇을 서버에 초대
 
-> ⚠️ 봇 역할이 게임 역할보다 **위에** 있어야 역할을 부여할 수 있어요.
+> ⚠️ 봇 역할이 게임 역할·관리 대상 멤버보다 **위에** 있어야 역할/닉네임 부여가 동작해요.
 > ⚠️ `Manage Channels` + `Move Members` 권한이 있어야 음성방 자동 생성/삭제가 동작해요.
-> ⚠️ `Kick Members` 권한은 활동검토 강퇴 승인 기능에 필요해요.
+> ⚠️ `Kick Members` 권한은 활동검토 강퇴·블랙리스트 강퇴에 필요해요.
+> ⚠️ `Manage Nicknames` = 관전 표시·셀프 닉네임 변경, `Manage Server` = 입장 경로(초대코드) 추적, `Manage Messages` = 스티키 재게시, `Ban Members` = 블랙리스트 네이티브 밴 옵션. **권한이 없어도 봇은 죽지 않고 안내만 띄워요(graceful).**
+> ✅ 이번 기능들은 모두 버튼/패널로 동작해 **새 슬래시 명령이 없어요 → `SYNC_COMMANDS` 재배포 불필요**.
 
 ---
 
@@ -135,7 +142,14 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     last_reviewed_at            TIMESTAMPTZ,          -- 마지막 활동검토 실행 시각
     recruit_post_channel_id     BIGINT,               -- 모집글 전용 게시 채널
     points_per_10min            INTEGER NOT NULL DEFAULT 2,      -- 10분당 지급 포인트
-    points_excluded_channel_id  BIGINT               -- 포인트 미지급 채널 (잠수채널)
+    points_excluded_channel_id  BIGINT,              -- 포인트 미지급 채널 (잠수채널)
+    nickname_log_channel_id     BIGINT,              -- 닉네임 변경 로그 채널 (007)
+    blacklist_ban_on_join       SMALLINT NOT NULL DEFAULT 0,  -- 재입장 차단: 0=강퇴 1=밴 (009)
+    blacklist_notify            SMALLINT NOT NULL DEFAULT 1,  -- 차단 전 DM 안내 여부 (009)
+    openchat_url                TEXT,                -- 카카오 오픈채팅 URL (채널 미게시, ephemeral 전용) (010)
+    openchat_gate_role_id       BIGINT,              -- 오픈채팅 게이트 통과 역할 (010)
+    kakao_invite_code           TEXT,                -- 카카오 유입용 초대코드 (010)
+    entry_marker_role_id        BIGINT               -- 카카오 유입자 마커 역할 (010)
 );
 
 -- ─── 활동 경고 누적 ──────────────────────────────
@@ -188,6 +202,61 @@ CREATE TABLE IF NOT EXISTS shop_roles (
     UNIQUE (guild_id, role_id)
 );
 
+-- ─── 닉네임 변경 이력 (007) ──────────────────────
+CREATE TABLE IF NOT EXISTS nickname_history (
+    id          BIGSERIAL   PRIMARY KEY,
+    guild_id    BIGINT      NOT NULL,
+    user_id     BIGINT      NOT NULL,
+    old_nick    TEXT,
+    new_nick    TEXT,
+    changed_by  BIGINT      NOT NULL,
+    changed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- ─── 관전자 (008) ────────────────────────────────
+CREATE TABLE IF NOT EXISTS spectators (
+    recruit_id     BIGINT      NOT NULL REFERENCES recruits(id) ON DELETE CASCADE,
+    user_id        BIGINT      NOT NULL,
+    original_nick  TEXT,
+    joined_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (recruit_id, user_id)
+);
+
+-- ─── 블랙리스트 (009) ────────────────────────────
+CREATE TABLE IF NOT EXISTS blacklist (
+    guild_id    BIGINT      NOT NULL,
+    user_id     BIGINT      NOT NULL,
+    reason      TEXT,
+    added_by    BIGINT,
+    native_ban  SMALLINT    NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id)
+);
+
+-- ─── 멤버 입장 경로 (010) ────────────────────────
+CREATE TABLE IF NOT EXISTS member_entry (
+    guild_id     BIGINT      NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    invite_code  TEXT,
+    route_label  TEXT        NOT NULL DEFAULT 'unknown',  -- discord | kakao | vanity | unknown
+    joined_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id)
+);
+
+-- ─── 스티키 공지 (011) ───────────────────────────
+CREATE TABLE IF NOT EXISTS sticky_messages (
+    guild_id        BIGINT      NOT NULL,
+    channel_id      BIGINT      NOT NULL,
+    title           TEXT,
+    content         TEXT        NOT NULL,
+    image_url       TEXT,
+    last_message_id BIGINT,
+    enabled         BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_by      BIGINT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, channel_id)
+);
+
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- 인덱스
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -210,6 +279,21 @@ CREATE INDEX IF NOT EXISTS idx_user_points_guild
 
 CREATE INDEX IF NOT EXISTS idx_shop_roles_guild
     ON shop_roles (guild_id, cost);
+
+CREATE INDEX IF NOT EXISTS idx_nickname_history_guild_user
+    ON nickname_history (guild_id, user_id, changed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_spectators_recruit ON spectators (recruit_id);
+CREATE INDEX IF NOT EXISTS idx_spectators_user    ON spectators (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_blacklist_guild ON blacklist (guild_id);
+
+CREATE INDEX IF NOT EXISTS idx_member_entry_route
+    ON member_entry (guild_id, route_label);
+
+CREATE INDEX IF NOT EXISTS idx_sticky_messages_enabled
+    ON sticky_messages (guild_id)
+    WHERE enabled = TRUE;
 ```
 
 ### 2-4. 테이블 설명
@@ -227,6 +311,11 @@ CREATE INDEX IF NOT EXISTS idx_shop_roles_guild
 | `leave_notices` | 잠수 신고 내역 (기간·사유·승인 상태) |
 | `user_points` | 서버별 유저 포인트 잔액 |
 | `shop_roles` | 포인트로 구매 가능한 역할과 가격 |
+| `nickname_history` | 닉네임 변경 이력 (old→new, 변경자·시각) |
+| `spectators` | 모집별 관전자 + 관전 시작 시점의 원본 닉네임 |
+| `blacklist` | 디스코드 ID 기반 차단 목록 (사유·등록자·네이티브밴 여부) |
+| `member_entry` | 멤버 입장 경로 기록 (kakao/discord/vanity/unknown) |
+| `sticky_messages` | 채널별 스티키 공지 (내용·현재 메시지 ID·on/off) |
 
 ### 2-5. 마이그레이션 (기존 설치 업데이트)
 
@@ -240,8 +329,14 @@ CREATE INDEX IF NOT EXISTS idx_shop_roles_guild
 | `004_points_and_shop.sql` | `user_points`·`shop_roles` 테이블 추가, `points_per_10min` 컬럼 추가 |
 | `005_points_afk_channel.sql` | `points_excluded_channel_id` (잠수채널) 컬럼 추가 |
 | `006_rename_points_per_hour.sql` | `points_per_hour` → `points_per_10min` rename, 기존 값 단위 변환 |
+| `007_self_nickname.sql` | `nickname_history` 테이블 + `nickname_log_channel_id` 컬럼 |
+| `008_spectators.sql` | `spectators` 테이블 (관전 기능) |
+| `009_blacklist.sql` | `blacklist` 테이블 + `blacklist_ban_on_join`·`blacklist_notify` 컬럼 |
+| `010_entry_dual_security.sql` | `member_entry` 테이블 + 오픈채팅/카카오 관련 4개 컬럼 |
+| `011_sticky_messages.sql` | `sticky_messages` 테이블 (스티키 공지) |
 
-> 각 파일은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문을 사용해 **재실행해도 안전**해요.
+> `002~005`, `007~011` 은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문이라 **재실행해도 안전**해요.
+> ⚠️ 단 `006` 은 값 변환(`÷6`)이 들어 있어 **한 번만 실행**해야 해요. 다시 실행하면 포인트가 또 나눠져요. (각 마이그레이션은 순서대로 1회씩만 실행하면 됩니다.)
 
 ---
 
@@ -305,15 +400,25 @@ discord-party-bot/
 │   ├── voice_stats.py      # 음성 이용시간 추적 + 랭킹 (잠수채널 제외 처리)
 │   ├── point_shop.py       # 포인트 상점 (적립·구매·관리자 설정)
 │   ├── activity_review.py  # 주간 활동검토 자동화
-│   ├── verification.py     # 규칙 인증 패널
+│   ├── verification.py     # 규칙 인증 + 오픈채팅 게이트 버튼
 │   ├── suggestions.py      # 익명 건의함
-│   └── leave_notices.py    # 잠수 신고
+│   ├── leave_notices.py    # 잠수 신고
+│   ├── nicknames.py        # 셀프 닉네임 변경 + 변경 이력
+│   ├── nick_util.py        # 닉네임 접두사·복원 공용 헬퍼 (관전/셀프닉 공유)
+│   ├── blacklist.py        # 블랙리스트 (ID 차단, on_member_join)
+│   ├── entry_tracking.py   # 입장 경로 구분 + 오픈채팅 게이트 설정
+│   └── sticky.py           # 스티키 공지 (채널 하단 고정)
 ├── migrations/
 │   ├── 002_add_suggestions_and_leave_notices.sql
 │   ├── 003_indexes_and_idempotency.sql
 │   ├── 004_points_and_shop.sql
 │   ├── 005_points_afk_channel.sql
-│   └── 006_rename_points_per_hour.sql
+│   ├── 006_rename_points_per_hour.sql
+│   ├── 007_self_nickname.sql
+│   ├── 008_spectators.sql
+│   ├── 009_blacklist.sql
+│   ├── 010_entry_dual_security.sql
+│   └── 011_sticky_messages.sql
 ├── requirements.txt
 ├── Procfile                # Railway 실행 설정 (worker: python bot.py)
 ├── runtime.txt

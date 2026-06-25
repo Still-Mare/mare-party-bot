@@ -51,6 +51,49 @@ class VerifyView(ui.View):
             ephemeral=True,
         )
 
+    @ui.button(label="오픈채팅 입장하기", emoji="💬",
+               style=discord.ButtonStyle.primary, custom_id="verify:openchat")
+    async def openchat(self, interaction: discord.Interaction, button: ui.Button):
+        """
+        이중보안 2차 게이트: 1차 인증을 마친 사람에게만 카카오 오픈채팅 URL을
+        '본인에게만 보이는(ephemeral)' 메시지로 전달한다. URL은 어떤 채널에도 게시되지
+        않으므로 외부 채팅 유도 링크로 인한 초대코드 정지 위험이 없다.
+        """
+        settings = await db.get_settings(interaction.guild.id)
+        url = settings.get("openchat_url")
+        if not url:
+            await interaction.response.send_message(
+                "아직 오픈채팅이 설정되지 않았어요. 관리자에게 문의해주세요.", ephemeral=True
+            )
+            return
+
+        # 1차 인증 선검사 (이중보안)
+        verified_role_id = settings.get("verified_role_id")
+        if verified_role_id:
+            vrole = interaction.guild.get_role(verified_role_id)
+            if vrole and vrole not in interaction.user.roles:
+                await interaction.response.send_message(
+                    "먼저 위의 **인증하기** 버튼으로 인증을 완료해주세요. (이중 보안)",
+                    ephemeral=True,
+                )
+                return
+
+        # 2차 게이트 통과 역할 부여 (선택)
+        gate_role_id = settings.get("openchat_gate_role_id")
+        if gate_role_id:
+            grole = interaction.guild.get_role(gate_role_id)
+            if grole and grole not in interaction.user.roles:
+                try:
+                    await interaction.user.add_roles(grole, reason="오픈채팅 게이트 통과")
+                except discord.HTTPException:
+                    pass
+
+        await interaction.response.send_message(
+            f"💬 **오픈채팅 입장 링크**\n{url}\n\n"
+            "(이 메시지는 회원님에게만 보여요. 링크는 외부에 공유하지 말아주세요.)",
+            ephemeral=True,
+        )
+
 
 class Verification(commands.Cog):
     def __init__(self, bot):

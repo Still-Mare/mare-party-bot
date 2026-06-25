@@ -79,9 +79,29 @@ class VoiceStats(commands.Cog):
                 await db.voice_join(guild.id, member.id)
             # 일반→일반 또는 잠수→잠수: 세션 유지 (입장시각 리셋 방지)
 
+        # ── 관전자가 모집 음성방을 떠났으면 관전 종료(닉 복원·권한 회수) ──
+        if before.channel is not None and before.channel != after.channel:
+            await self._handle_spectator_leave(member, before.channel)
+
         # ── 모집용 음성방이 비었는지 확인 ──
         if before.channel is not None:
             await self._check_empty_recruit_voice(before.channel)
+
+    async def _handle_spectator_leave(self, member, channel):
+        """관전자가 모집 음성방을 떠나면 관전 종료 처리(닉 복원·권한 회수)."""
+        if not isinstance(channel, discord.VoiceChannel):
+            return
+        recruit_id = await db.find_recruit_by_voice(channel.id)
+        if recruit_id is None:
+            return
+        if not await db.is_spectator(recruit_id, member.id):
+            return
+        recruit = await db.get_recruit(recruit_id)
+        if not recruit:
+            return
+        from cogs.recruitment import stop_spectate, refresh_recruit_message
+        await stop_spectate(member.guild, recruit, member)
+        await refresh_recruit_message(self.bot, recruit_id)
 
     async def _check_empty_recruit_voice(self, channel):
         """모집용 음성방이 비었으면 삭제하고 모집글을 아카이브한다."""
