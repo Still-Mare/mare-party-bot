@@ -306,7 +306,7 @@ class RoleStatsSelect(ui.Select):
                 ),
                 discord.SelectOption(
                     label="입장/오픈채팅 설정", value="entry_openchat", emoji="🔐",
-                    description="오픈채팅 URL·카카오 코드·게이트/마커 역할·유입 통계",
+                    description="오픈채팅 주소·카카오 유입 코드·인증 역할·유입 통계",
                 ),
                 discord.SelectOption(
                     label="닉네임 변경 이력 보기", value="nick_history", emoji="✏️",
@@ -341,11 +341,9 @@ class RoleStatsSelect(ui.Select):
                 view=BlacklistManageView(), ephemeral=True,
             )
         elif value == "entry_openchat":
-            from cogs.entry_tracking import EntrySettingsView
+            from cogs.entry_tracking import EntrySettingsView, build_entry_settings_embed
             await interaction.response.send_message(
-                "🔐 **입장/오픈채팅 설정** — 카카오·디스코드 유입 구분과 오픈채팅 이중보안 게이트를 설정해요.\n"
-                "오픈채팅 링크는 채널에 게시되지 않고, 인증을 마친 유저에게만 본인에게 보이게(ephemeral) 전달돼요.\n"
-                "게이트 버튼은 `/인증패널`로 설치한 인증 패널의 **[오픈채팅 입장하기]** 버튼이에요.",
+                embed=build_entry_settings_embed(),
                 view=EntrySettingsView(), ephemeral=True,
             )
         elif value == "nick_history":
