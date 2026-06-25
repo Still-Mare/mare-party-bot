@@ -75,13 +75,13 @@ class NicknameModal(ui.Modal, title="닉네임 변경"):
         old_base = nick_util.current_base_nick(member)        # 관전 접두사 제외한 현재 베이스
         new_base = str(self.new_nick).strip() or None
 
-        # 관전 중이면 접두사 재적용 + 관전 원본 닉 갱신
-        spectating = await db.get_spectating_recruit_ids(guild.id, member.id)
+        # 관전 모드 중이면 접두사 재적용 + 관전 원본 닉 갱신
+        spectating = await db.is_in_spectator_mode(guild.id, member.id)
         if spectating:
             desired = nick_util.with_prefix(new_base, member)
             ok, err = await nick_util.set_nick(member, desired, reason="셀프 닉네임 변경(관전 중)")
             if ok:
-                await db.update_spectator_original_nick(guild.id, member.id, new_base)
+                await db.update_spectator_mode_nick(guild.id, member.id, new_base)
         else:
             ok, err = await nick_util.set_nick(member, new_base, reason="셀프 닉네임 변경")
 

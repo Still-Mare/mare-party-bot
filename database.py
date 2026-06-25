@@ -29,6 +29,8 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "kakao_invite_code", "entry_marker_role_id",
     # 012 오픈채팅 운영자 승인제
     "openchat_approval_required", "openchat_request_channel_id",
+    # 013 전역 관전 모드
+    "spectator_role_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
@@ -167,12 +169,18 @@ async def set_recruit_voice(recruit_id, voice_channel_id):
         )
 
 
-async def archive_recruit(recruit_id):
+async def archive_recruit(recruit_id) -> bool:
+    """
+    status를 'archived'로 원자적으로 점유. 점유에 성공하면 True, 이미 archived였으면 False.
+    중복 아카이브(스테일 정리 루프 vs 마감 버튼 등)를 방지한다.
+    """
     async with _get_pool().acquire() as con:
-        await con.execute(
-            "UPDATE recruits SET status = 'archived', voice_channel_id = NULL WHERE id = $1",
+        r = await con.fetchval(
+            """UPDATE recruits SET status = 'archived', voice_channel_id = NULL
+               WHERE id = $1 AND status <> 'archived' RETURNING id""",
             recruit_id,
         )
+    return r is not None
 
 
 async def find_recruit_by_voice(voice_channel_id):
@@ -356,7 +364,8 @@ async def get_settings(guild_id):
                       blacklist_ban_on_join, blacklist_notify,
                       openchat_url, openchat_gate_role_id,
                       kakao_invite_code, entry_marker_role_id,
-                      openchat_approval_required, openchat_request_channel_id
+                      openchat_approval_required, openchat_request_channel_id,
+                      spectator_role_id
                FROM guild_settings WHERE guild_id = $1""",
             guild_id,
         )
@@ -372,6 +381,7 @@ async def get_settings(guild_id):
             "openchat_url": None, "openchat_gate_role_id": None,
             "kakao_invite_code": None, "entry_marker_role_id": None,
             "openchat_approval_required": 0, "openchat_request_channel_id": None,
+            "spectator_role_id": None,
         }
     return {
         "voice_category_id": r["voice_category_id"],
@@ -392,6 +402,7 @@ async def get_settings(guild_id):
         "entry_marker_role_id": r["entry_marker_role_id"],
         "openchat_approval_required": r["openchat_approval_required"],
         "openchat_request_channel_id": r["openchat_request_channel_id"],
+        "spectator_role_id": r["spectator_role_id"],
     }
 
 
@@ -746,72 +757,83 @@ async def get_nickname_history(guild_id: int, user_id: int, limit: int = 15) -> 
     ]
 
 
-# ─────────────────────── 008 관전자 ───────────────────────
-async def add_spectator(recruit_id: int, user_id: int, original_nick) -> bool:
-    """관전자 등록. 신규면 True, 이미 관전 중이면 False."""
+# ─────────────────────── 008/013 전역 관전 모드 ───────────────────────
+async def set_spectator_role(guild_id: int, role_id: int | None):
+    await _upsert_setting(guild_id, "spectator_role_id", role_id)
+
+
+async def enter_spectator_mode(guild_id: int, user_id: int, original_nick) -> bool:
+    """전역 관전 모드 진입. 신규면 True, 이미 켜져 있으면 False(원본 닉 유지)."""
     async with _get_pool().acquire() as con:
         result = await con.execute(
-            """INSERT INTO spectators (recruit_id, user_id, original_nick)
+            """INSERT INTO spectator_mode (guild_id, user_id, original_nick)
                VALUES ($1, $2, $3)
-               ON CONFLICT (recruit_id, user_id) DO NOTHING""",
-            recruit_id, user_id, original_nick,
+               ON CONFLICT (guild_id, user_id) DO NOTHING""",
+            guild_id, user_id, original_nick,
         )
     return result.endswith("1")
 
 
-async def remove_spectator(recruit_id: int, user_id: int):
-    """관전 해제. (존재했는지, 저장된 원본 닉) 튜플 반환. 없으면 (False, None)."""
+async def exit_spectator_mode(guild_id: int, user_id: int):
+    """관전 모드 해제. (켜져 있었는지, 보관된 원본 닉) 반환. 아니면 (False, None)."""
     async with _get_pool().acquire() as con:
         row = await con.fetchrow(
-            """DELETE FROM spectators
-               WHERE recruit_id = $1 AND user_id = $2
+            """DELETE FROM spectator_mode
+               WHERE guild_id = $1 AND user_id = $2
                RETURNING original_nick""",
-            recruit_id, user_id,
+            guild_id, user_id,
         )
     return (True, row["original_nick"]) if row else (False, None)
 
 
-async def list_spectators(recruit_id: int) -> list:
-    async with _get_pool().acquire() as con:
-        rows = await con.fetch(
-            """SELECT user_id, original_nick FROM spectators
-               WHERE recruit_id = $1 ORDER BY joined_at""",
-            recruit_id,
-        )
-    return [{"user_id": r["user_id"], "original_nick": r["original_nick"]} for r in rows]
-
-
-async def is_spectator(recruit_id: int, user_id: int) -> bool:
+async def is_in_spectator_mode(guild_id: int, user_id: int) -> bool:
     async with _get_pool().acquire() as con:
         r = await con.fetchval(
-            "SELECT 1 FROM spectators WHERE recruit_id = $1 AND user_id = $2",
-            recruit_id, user_id,
+            "SELECT 1 FROM spectator_mode WHERE guild_id = $1 AND user_id = $2",
+            guild_id, user_id,
         )
     return r is not None
 
 
-async def get_spectating_recruit_ids(guild_id: int, user_id: int) -> list:
-    """이 유저가 현재 관전 중인 '열린' 모집 ID 목록 (셀프 닉변 시 접두사 재적용용)."""
-    async with _get_pool().acquire() as con:
-        rows = await con.fetch(
-            """SELECT s.recruit_id FROM spectators s
-               JOIN recruits r ON r.id = s.recruit_id
-               WHERE r.guild_id = $1 AND r.status = 'open' AND s.user_id = $2""",
-            guild_id, user_id,
-        )
-    return [r["recruit_id"] for r in rows]
-
-
-async def update_spectator_original_nick(guild_id: int, user_id: int, new_base):
-    """셀프 닉변 시, 열린 모집의 관전 레코드 원본 닉을 새 베이스로 갱신."""
+async def update_spectator_mode_nick(guild_id: int, user_id: int, new_base):
+    """관전 모드 중 셀프 닉변 시, 복원용 원본 닉을 새 베이스로 갱신."""
     async with _get_pool().acquire() as con:
         await con.execute(
-            """UPDATE spectators SET original_nick = $3
-               WHERE user_id = $2 AND recruit_id IN (
-                   SELECT id FROM recruits WHERE guild_id = $1 AND status = 'open'
-               )""",
+            "UPDATE spectator_mode SET original_nick = $3 WHERE guild_id = $1 AND user_id = $2",
             guild_id, user_id, new_base,
         )
+
+
+async def list_user_open_recruits(guild_id: int, user_id: int) -> list:
+    """이 유저가 참가자(호스트 포함)로 들어있는 열린 모집 ID 목록."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT r.id FROM recruits r
+               JOIN participants p ON p.recruit_id = r.id
+               WHERE r.guild_id = $1 AND r.status = 'open' AND p.user_id = $2""",
+            guild_id, user_id,
+        )
+    return [r["id"] for r in rows]
+
+
+async def set_recruit_host(recruit_id: int, new_host_id: int):
+    """모집 호스트 위임."""
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            "UPDATE recruits SET host_id = $1 WHERE id = $2", new_host_id, recruit_id
+        )
+
+
+async def list_stale_open_recruits(cutoff, limit: int = 50) -> list:
+    """음성방 없이 cutoff(datetime) 이전에 생성돼 방치된 열린 모집 (자동정리 대상). 틱당 limit개."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT id, guild_id FROM recruits
+               WHERE status = 'open' AND voice_channel_id IS NULL AND created_at < $1
+               ORDER BY created_at LIMIT $2""",
+            cutoff, limit,
+        )
+    return [{"id": r["id"], "guild_id": r["guild_id"]} for r in rows]
 
 
 # ─────────────────────── 009 블랙리스트 ───────────────────────

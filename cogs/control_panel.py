@@ -12,7 +12,7 @@ import database as db
 from cogs.game_roles import (
     AddGameModal, RemoveGameView, RolePanelView, CustomEmojiAddView,
 )
-from cogs.recruitment import GamePickView
+from cogs.recruitment import GamePickView, SpectatorPanelView, build_spectator_panel_embed
 from cogs.voice_stats import build_my_stats_embed, build_ranking_embed
 
 
@@ -728,6 +728,7 @@ class ControlPanel(commands.Cog):
         app_commands.Choice(name="🎮 게임 역할", value="roles"),
         app_commands.Choice(name="📊 내 활동 & 커뮤니티", value="activity"),
         app_commands.Choice(name="✏️ 닉네임 변경", value="nickname"),
+        app_commands.Choice(name="👀 관전 모드", value="spectator"),
         app_commands.Choice(name="🛠️ 관리자", value="admin"),
     ])
     async def setup_panel(
@@ -749,6 +750,8 @@ class ControlPanel(commands.Cog):
         panels = {
             "nickname": (build_nickname_panel_embed, NicknamePanelView,
                          "✏️ 닉네임 변경 패널을 설치했어요!"),
+            "spectator": (build_spectator_panel_embed, SpectatorPanelView,
+                          "👀 관전 모드 패널을 설치했어요!"),
             "recruit":  (build_recruit_panel_embed,  RecruitPanelView,
                          "📢 파티 모집 패널을 설치했어요!"),
             "roles":    (build_roles_panel_embed,    RolesPanelView,
