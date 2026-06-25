@@ -94,6 +94,15 @@ def build_entry_settings_embed() -> discord.Embed:
         value="카카오 vs 디스코드로 각각 몇 명이 들어왔는지 확인해요.",
         inline=False,
     )
+    embed.add_field(
+        name="🛂 운영자 승인제 + 신청 받을 채널  ·  선택(on/off)",
+        value=(
+            "켜면 `[오픈채팅 입장하기]`가 **즉시 역할**이 아니라 **운영자 승인 신청**으로 바뀌어요.\n"
+            "신청은 '신청 받을 채널'에 [승인][거절] 버튼으로 올라가고, 운영자가 카톡 입장을 "
+            "확인하고 승인하면 그때 역할이 부여돼요. (기본은 꺼짐)"
+        ),
+        inline=False,
+    )
     embed.set_footer(text="⭐ 오픈채팅 주소만 등록해도 보안 기능은 바로 작동해요.")
     return embed
 
@@ -195,6 +204,150 @@ class MarkerRoleSelectView(ui.View):
         self.add_item(MarkerRoleSelect())
 
 
+# ───────── 오픈채팅 운영자 승인제 ─────────
+def build_openchat_request_embed(member) -> discord.Embed:
+    embed = discord.Embed(
+        title="💬 오픈채팅 입장 신청",
+        description=(
+            f"{member.mention} (`{member.id}`) 님이 오픈채팅 입장을 신청했어요.\n"
+            "**카카오톡 오픈채팅에 실제로 입장했는지 확인**한 뒤 아래 버튼으로 처리해주세요."
+        ),
+        color=0xBA7517,
+    )
+    embed.set_footer(text=f"신청자: {member.display_name}")
+    return embed
+
+
+class OpenChatReviewView(ui.View):
+    """신청 메시지에 붙는 승인/거절 버튼 (영구)."""
+    def __init__(self, request_id: int):
+        super().__init__(timeout=None)
+        self.request_id = request_id
+        self.approve_btn.custom_id = f"ocreq_approve:{request_id}"
+        self.reject_btn.custom_id = f"ocreq_reject:{request_id}"
+
+    async def _handle(self, interaction: discord.Interaction, approved: bool):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 처리할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        user_id = await db.review_openchat_request(self.request_id, interaction.user.id, approved)
+        if user_id is None:
+            await interaction.followup.send("이미 처리된 신청이에요.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        member = guild.get_member(user_id)
+        if member is None:
+            # 캐시 미스/대규모 길드 대비 — 직접 조회 (그래도 없으면 진짜 나간 것)
+            try:
+                member = await guild.fetch_member(user_id)
+            except discord.HTTPException:
+                member = None
+        settings = await db.get_settings(guild.id)
+        note = ""
+
+        if approved:
+            gate_role_id = settings.get("openchat_gate_role_id")
+            if not member:
+                note = " (⚠️ 유저가 서버에 없어 역할 부여/DM을 못 했어요)"
+            elif gate_role_id:
+                role = guild.get_role(gate_role_id)
+                if role and role not in member.roles:
+                    try:
+                        await member.add_roles(role, reason="오픈채팅 신청 승인")
+                    except discord.HTTPException:
+                        note = " (역할 부여 실패 — 봇 권한/역할 위치 확인 필요)"
+            else:
+                note = " (※ '오픈채팅 인증 역할'이 설정 안 돼 있어 줄 역할이 없어요)"
+            if member:
+                try:
+                    await member.send(f"**{guild.name}** 오픈채팅 입장 신청이 **승인**됐어요! 환영해요 🎉")
+                except discord.HTTPException:
+                    pass
+        else:
+            if member:
+                try:
+                    await member.send(
+                        f"**{guild.name}** 오픈채팅 입장 신청이 거절됐어요. 문의는 운영진에게 부탁드려요."
+                    )
+                except discord.HTTPException:
+                    pass
+
+        # 신청 메시지를 결과로 갱신하고 버튼 제거 (임베드 갱신이 실패해도 버튼은 꼭 제거)
+        result = ("✅ 승인됨" if approved else "⛔ 거절됨") + f" · 처리: {interaction.user.mention}" + note
+        try:
+            if interaction.message.embeds:
+                embed = interaction.message.embeds[0]
+            elif member:
+                embed = build_openchat_request_embed(member)
+            else:
+                embed = discord.Embed(title="💬 오픈채팅 입장 신청")
+            embed.color = 0x248046 if approved else 0xED4245
+            embed.add_field(name="처리 결과", value=result, inline=False)
+            await interaction.message.edit(embed=embed, view=None)
+        except discord.HTTPException:
+            try:
+                await interaction.message.edit(view=None)  # 최소한 죽은 버튼은 제거
+            except discord.HTTPException:
+                pass
+
+        await interaction.followup.send(
+            f"{'승인' if approved else '거절'} 처리했어요.{note}", ephemeral=True
+        )
+
+    @ui.button(label="승인", emoji="✅", style=discord.ButtonStyle.success)
+    async def approve_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await self._handle(interaction, approved=True)
+
+    @ui.button(label="거절", emoji="⛔", style=discord.ButtonStyle.danger)
+    async def reject_btn(self, interaction: discord.Interaction, button: ui.Button):
+        await self._handle(interaction, approved=False)
+
+
+async def post_openchat_request(guild, member, request_id: int, settings: dict) -> bool:
+    """신청을 운영자 채널에 게시. 채널 미설정/실패 시 False."""
+    ch_id = settings.get("openchat_request_channel_id") or settings.get("review_log_channel")
+    if not ch_id:
+        return False
+    channel = guild.get_channel(ch_id)
+    if not channel:
+        return False
+    try:
+        msg = await channel.send(
+            embed=build_openchat_request_embed(member), view=OpenChatReviewView(request_id)
+        )
+    except discord.HTTPException:
+        return False
+    await db.set_openchat_request_msg(request_id, msg.id)
+    return True
+
+
+class RequestChannelSelect(ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="신청 받을 운영자 채널 선택",
+            channel_types=[discord.ChannelType.text],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        channel = self.values[0]
+        await db.set_openchat_request_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(
+            f"오픈채팅 입장 신청을 {channel.mention} 에 받기로 했어요. (관리자만 보이는 채널 권장)",
+            ephemeral=True,
+        )
+
+
+class RequestChannelSelectView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(RequestChannelSelect())
+
+
 class EntrySettingsView(ui.View):
     """관리자: 입장 경로 + 오픈채팅 게이트 설정 (ephemeral)."""
     def __init__(self):
@@ -269,6 +422,39 @@ class EntrySettingsView(ui.View):
                 inline=False,
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @ui.button(label="운영자 승인제 켜기/끄기", emoji="🛂", style=discord.ButtonStyle.danger, row=3)
+    async def toggle_approval(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        settings = await db.get_settings(interaction.guild.id)
+        new_val = not bool(settings.get("openchat_approval_required"))
+        await db.set_openchat_approval_required(interaction.guild.id, new_val)
+        warn = ""
+        if new_val:
+            if not settings.get("openchat_gate_role_id"):
+                warn += "\n⚠️ '오픈채팅 인증 역할'이 아직 없어요 — 승인해도 부여할 역할이 없어요. 먼저 지정해주세요."
+            if not (settings.get("openchat_request_channel_id") or settings.get("review_log_channel")):
+                warn += "\n⚠️ '신청 받을 채널'이 없어요 — 신청이 운영자에게 안 보여요. 먼저 지정해주세요."
+        state = (
+            "켜짐 — 버튼 누르면 신청 접수 → 운영자 승인 후 역할 부여"
+            if new_val else
+            "꺼짐 — 버튼 누르면 바로 역할 부여 (승인 불필요)"
+        )
+        await interaction.response.send_message(
+            f"오픈채팅 운영자 승인제를 **{state}** (으)로 바꿨어요.{warn}", ephemeral=True
+        )
+
+    @ui.button(label="신청 받을 채널", emoji="📨", style=discord.ButtonStyle.secondary, row=3)
+    async def set_request_channel(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "오픈채팅 입장 신청이 올라올 운영자 채널을 선택하세요. (승인제를 켰을 때 여기로 신청이 와요)",
+            view=RequestChannelSelectView(), ephemeral=True,
+        )
 
 
 # ───────── 입장 경로 추적 Cog ─────────
