@@ -51,10 +51,57 @@ def _is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
 
 
+def build_entry_settings_embed() -> discord.Embed:
+    """입장/오픈채팅 설정 화면 — 각 버튼이 무엇을 하는지 쉬운 말로 안내."""
+    embed = discord.Embed(
+        title="🔐 입장 보안 & 오픈채팅 설정",
+        description=(
+            "들어온 사람을 **카카오 오픈채팅 주소로부터 안전하게** 안내하고, "
+            "누가 어느 경로로 들어왔는지 구분해요.\n"
+            "아래 버튼으로 설정하세요. (⭐ = 꼭 필요 · 나머지는 선택)"
+        ),
+        color=0x5865F2,
+    )
+    embed.add_field(
+        name="⭐ 💬 오픈채팅 주소",
+        value=(
+            "카톡 오픈채팅 링크를 등록해요. 이 링크는 **어떤 채널에도 올라가지 않아요.**\n"
+            "규칙 인증을 마친 사람이 인증패널의 `[오픈채팅 입장하기]` 버튼을 눌렀을 때만 "
+            "**그 사람 화면에만** 잠깐 보여요 → 그래서 디스코드 초대코드가 정지되지 않아요."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🟡 카카오 유입 코드  ·  선택(통계용)",
+        value=(
+            "카톡에 올릴 **디스코드 초대링크 1개**를 등록하면, 그 링크로 들어온 사람은 "
+            "'카카오', 나머지는 '디스코드'로 자동 구분돼요."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🔓 오픈채팅 인증 역할  ·  선택",
+        value="`[오픈채팅 입장하기]` 버튼을 통과한 사람에게 **자동으로 줄 역할**이에요.",
+        inline=False,
+    )
+    embed.add_field(
+        name="🏷️ 카톡 유입 표시 역할  ·  선택",
+        value="'카카오 유입 코드'로 들어온 사람에게 **자동으로 줄 역할**이에요.",
+        inline=False,
+    )
+    embed.add_field(
+        name="📊 유입 통계",
+        value="카카오 vs 디스코드로 각각 몇 명이 들어왔는지 확인해요.",
+        inline=False,
+    )
+    embed.set_footer(text="⭐ 오픈채팅 주소만 등록해도 보안 기능은 바로 작동해요.")
+    return embed
+
+
 # ───────── 관리자 설정 UI ─────────
-class OpenChatUrlModal(ui.Modal, title="오픈채팅 URL 설정"):
+class OpenChatUrlModal(ui.Modal, title="오픈채팅 주소 설정"):
     url_input = ui.TextInput(
-        label="카카오 오픈채팅 URL (비우면 해제)",
+        label="카카오 오픈채팅 링크 (비우면 삭제)",
         placeholder="https://open.kakao.com/o/...",
         required=False,
         max_length=300,
@@ -68,20 +115,20 @@ class OpenChatUrlModal(ui.Modal, title="오픈채팅 URL 설정"):
         await db.set_openchat_url(interaction.guild.id, url)
         if url:
             await interaction.response.send_message(
-                "오픈채팅 URL 을 저장했어요.\n"
-                "⚠️ 이 링크는 **어떤 채널에도 게시되지 않고**, 인증을 마친 유저가 "
-                "[오픈채팅 입장하기] 버튼을 누를 때 **본인에게만(ephemeral)** 보여요. "
-                "그래서 초대코드 정지 위험이 없어요.",
+                "✅ 오픈채팅 주소를 저장했어요.\n"
+                "이 링크는 **어떤 채널에도 올라가지 않고**, 규칙 인증을 마친 사람이 "
+                "`[오픈채팅 입장하기]` 버튼을 누를 때 **그 사람에게만** 보여요. "
+                "그래서 디스코드 초대코드가 정지될 걱정이 없어요.",
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message("오픈채팅 URL 을 해제했어요.", ephemeral=True)
+            await interaction.response.send_message("오픈채팅 주소를 삭제했어요.", ephemeral=True)
 
 
-class KakaoCodeModal(ui.Modal, title="카카오 유입 초대코드 등록"):
+class KakaoCodeModal(ui.Modal, title="카카오 유입 코드 등록"):
     code_input = ui.TextInput(
-        label="카카오 전용 초대코드 또는 링크 (비우면 해제)",
-        placeholder="https://discord.gg/xxxx 또는 xxxx",
+        label="카톡에 올릴 디스코드 초대링크 (비우면 삭제)",
+        placeholder="https://discord.gg/xxxx  또는  xxxx",
         required=False,
         max_length=120,
     )
@@ -94,17 +141,18 @@ class KakaoCodeModal(ui.Modal, title="카카오 유입 초대코드 등록"):
         await db.set_kakao_invite_code(interaction.guild.id, code)
         if code:
             await interaction.response.send_message(
-                f"카카오 유입용 초대코드를 `{code}` 로 등록했어요.\n"
-                "이제 이 코드로 들어온 사람은 'kakao', 그 외 초대는 'discord' 로 구분돼요.",
+                f"✅ 카카오 유입 코드를 `{code}` 로 등록했어요.\n"
+                "이제 이 링크로 들어온 사람은 **카카오**, 다른 링크로 들어온 사람은 "
+                "**디스코드**로 자동 구분돼요. (이 링크를 카톡 채팅방에 공유하세요.)",
                 ephemeral=True,
             )
         else:
-            await interaction.response.send_message("카카오 초대코드를 해제했어요.", ephemeral=True)
+            await interaction.response.send_message("카카오 유입 코드를 삭제했어요.", ephemeral=True)
 
 
 class GateRoleSelect(ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="오픈채팅 통과 역할 선택")
+        super().__init__(placeholder="오픈채팅 인증 역할 선택")
 
     async def callback(self, interaction: discord.Interaction):
         if not _is_admin(interaction):
@@ -113,8 +161,8 @@ class GateRoleSelect(ui.RoleSelect):
         role = self.values[0]
         await db.set_openchat_gate_role(interaction.guild.id, role.id)
         await interaction.response.send_message(
-            f"오픈채팅 통과 역할을 {role.mention}(으)로 설정했어요. "
-            "게이트를 통과하면 이 역할이 부여돼요.",
+            f"✅ 오픈채팅 인증 역할을 {role.mention}(으)로 정했어요.\n"
+            "`[오픈채팅 입장하기]` 버튼을 통과하면 이 역할이 자동으로 부여돼요.",
             ephemeral=True,
         )
 
@@ -127,7 +175,7 @@ class GateRoleSelectView(ui.View):
 
 class MarkerRoleSelect(ui.RoleSelect):
     def __init__(self):
-        super().__init__(placeholder="카카오 유입 마커 역할 선택")
+        super().__init__(placeholder="카톡 유입 표시 역할 선택")
 
     async def callback(self, interaction: discord.Interaction):
         if not _is_admin(interaction):
@@ -136,7 +184,7 @@ class MarkerRoleSelect(ui.RoleSelect):
         role = self.values[0]
         await db.set_entry_marker_role(interaction.guild.id, role.id)
         await interaction.response.send_message(
-            f"카카오 유입자에게 부여할 마커 역할을 {role.mention}(으)로 설정했어요.",
+            f"✅ 카톡 유입 코드로 들어온 사람에게 줄 역할을 {role.mention}(으)로 정했어요.",
             ephemeral=True,
         )
 
@@ -152,37 +200,37 @@ class EntrySettingsView(ui.View):
     def __init__(self):
         super().__init__(timeout=180)
 
-    @ui.button(label="오픈채팅 URL", emoji="💬", style=discord.ButtonStyle.primary, row=0)
+    @ui.button(label="오픈채팅 주소", emoji="💬", style=discord.ButtonStyle.primary, row=0)
     async def set_url(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction):
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
         await interaction.response.send_modal(OpenChatUrlModal())
 
-    @ui.button(label="카카오 초대코드", emoji="🟡", style=discord.ButtonStyle.secondary, row=0)
+    @ui.button(label="카카오 유입 코드", emoji="🟡", style=discord.ButtonStyle.secondary, row=0)
     async def set_kakao(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction):
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
         await interaction.response.send_modal(KakaoCodeModal())
 
-    @ui.button(label="게이트 통과 역할", emoji="🔓", style=discord.ButtonStyle.secondary, row=1)
+    @ui.button(label="오픈채팅 인증 역할", emoji="🔓", style=discord.ButtonStyle.secondary, row=1)
     async def set_gate_role(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction):
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "오픈채팅 게이트 통과 시 부여할 역할을 선택하세요. (선택 사항)",
+            "`[오픈채팅 입장하기]` 버튼을 통과한 사람에게 자동으로 줄 역할을 선택하세요. (선택)",
             view=GateRoleSelectView(), ephemeral=True,
         )
 
-    @ui.button(label="카카오 마커 역할", emoji="🏷️", style=discord.ButtonStyle.secondary, row=1)
+    @ui.button(label="카톡 유입 표시 역할", emoji="🏷️", style=discord.ButtonStyle.secondary, row=1)
     async def set_marker_role(self, interaction: discord.Interaction, button: ui.Button):
         if not _is_admin(interaction):
             await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "카카오 유입자에게 자동 부여할 마커 역할을 선택하세요. (선택 사항)",
+            "'카카오 유입 코드'로 들어온 사람에게 자동으로 줄 역할을 선택하세요. (선택)",
             view=MarkerRoleSelectView(), ephemeral=True,
         )
 
@@ -200,24 +248,24 @@ class EntrySettingsView(ui.View):
         vanity = stats.get("vanity", 0)
         me = interaction.guild.me
         track_ok = me.guild_permissions.manage_guild
-        embed = discord.Embed(title="📊 입장 경로 유입 통계", color=0x5865F2)
+        embed = discord.Embed(title="📊 입장 경로별 인원", color=0x5865F2)
         embed.description = (
-            f"🟡 카카오: **{kakao}**\n"
-            f"🔷 디스코드: **{discord_n}**\n"
-            f"🌐 vanity: **{vanity}**\n"
-            f"❓ 미상(동시입장 등): **{unknown}**"
+            f"🟡 카카오 오픈채팅으로 들어옴: **{kakao}명**\n"
+            f"🔷 디스코드 초대로 들어옴: **{discord_n}명**\n"
+            f"🌐 서버 맞춤 URL(vanity)로 들어옴: **{vanity}명**\n"
+            f"❓ 구분 못 함(동시 입장 등): **{unknown}명**"
         )
         if not track_ok:
             embed.add_field(
-                name="⚠️ 추적 비활성",
-                value="봇에 '서버 관리하기(Manage Guild)' 권한이 없어 초대코드 추적이 꺼져 있어요. "
-                      "권한을 켜면 경로가 기록돼요.",
+                name="⚠️ 지금은 경로 추적이 꺼져 있어요",
+                value="봇에 '서버 관리하기(Manage Server)' 권한이 없어요. "
+                      "이 권한을 켜야 누가 어느 경로로 들어왔는지 기록돼요.",
                 inline=False,
             )
         elif not settings.get("kakao_invite_code"):
             embed.add_field(
-                name="ℹ️ 카카오 코드 미등록",
-                value="아직 카카오 전용 초대코드를 등록하지 않아 모든 유입이 'discord' 로 분류돼요.",
+                name="ℹ️ 아직 카카오 유입 코드를 등록 안 했어요",
+                value="카카오 유입 코드를 등록하기 전까지는 모두 '디스코드'로 분류돼요.",
                 inline=False,
             )
         await interaction.followup.send(embed=embed, ephemeral=True)
