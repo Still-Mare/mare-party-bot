@@ -72,6 +72,8 @@ class PartyBot(commands.Bot):
         self.add_view(SuggestionAdminView())
         from cogs.nicknames import NicknamePanelView
         self.add_view(NicknamePanelView())
+        from cogs.recruitment import SpectatorPanelView
+        self.add_view(SpectatorPanelView())
 
         # 기존 모집글 / 역할 버튼 복원
         await self._restore_persistent_views()

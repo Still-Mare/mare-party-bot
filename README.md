@@ -22,7 +22,7 @@
 | 🕊️ 잠수 신고 | 활동검토 면제 신청 (3일/1주/2주/1개월 또는 날짜 직접 입력). 관리자 승인식 |
 | 🔐 입장 이중보안 | 카카오 오픈채팅 URL을 채널에 안 올리고, 인증 통과자에게만 본인에게만 보이는 메시지로 전달 → 초대코드 정지 회피. 카카오/디스코드 유입 경로 자동 구분. (선택) 운영자 승인제 — 신청 → 운영자가 카톡 입장 확인 후 승인 |
 | 🚫 블랙리스트 | 디스코드 고유 ID 기반 차단. 이미 나간 유저도 ID로 등록해 재입장 차단(강퇴/밴 토글, 네이티브 밴 옵션) |
-| 👀 관전 | 파티 정원이 차도 관전자는 음성방 입장 가능, 닉네임 앞에 "관전 " 표시 (종료 시 자동 복원) |
+| 👀 관전 모드 | 전용 패널에서 [관전 모드 켜기] → 닉 "관전" 표시 + 모든 파티 음성방 자유 입장(정원 무관). 참가 중이면 자동 탈퇴(모집자는 자동 위임), 음성 퇴장 시 자동 OFF |
 | ✏️ 셀프 닉네임 | 서버가 별명 변경을 막아둬도 봇이 대신 변경. old→new 변경 이력 기록·조회 |
 | 📌 스티키 공지 | 운영자 공지를 채널 맨 아래에 항상 고정 (새 글이 올라오면 자동 재게시) |
 
@@ -100,7 +100,8 @@ CREATE TABLE IF NOT EXISTS recruits (
     note             TEXT,
     status           TEXT    NOT NULL DEFAULT 'open',  -- open | closed | archived
     voice_channel_id BIGINT,
-    temp_role_id     BIGINT
+    temp_role_id     BIGINT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()  -- 방치 모집글 자동정리 기준 (013)
 );
 
 -- ─── 파티 참가자 ─────────────────────────────────
@@ -151,7 +152,8 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     kakao_invite_code           TEXT,                -- 카카오 유입용 초대코드 (010)
     entry_marker_role_id        BIGINT,              -- 카카오 유입자 마커 역할 (010)
     openchat_approval_required  SMALLINT NOT NULL DEFAULT 0,  -- 오픈채팅 운영자 승인제 on/off (012)
-    openchat_request_channel_id BIGINT               -- 오픈채팅 신청을 받을 운영자 채널 (012)
+    openchat_request_channel_id BIGINT,              -- 오픈채팅 신청을 받을 운영자 채널 (012)
+    spectator_role_id           BIGINT               -- 관전자 역할 (자동 생성, 관전 모드용) (013)
 );
 
 -- ─── 활동 경고 누적 ──────────────────────────────
@@ -310,6 +312,16 @@ CREATE TABLE IF NOT EXISTS openchat_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_openchat_requests_pending
     ON openchat_requests (guild_id, status);
+
+-- ─── 전역 관전 모드 (013) ────────────────────────
+CREATE TABLE IF NOT EXISTS spectator_mode (
+    guild_id      BIGINT      NOT NULL,
+    user_id       BIGINT      NOT NULL,
+    original_nick TEXT,
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (guild_id, user_id)
+);
+-- 참고: 구버전 `spectators` 테이블(008)은 전역 관전 모드로 대체되어 더 이상 사용하지 않습니다.
 ```
 
 ### 2-4. 테이블 설명
@@ -328,7 +340,8 @@ CREATE INDEX IF NOT EXISTS idx_openchat_requests_pending
 | `user_points` | 서버별 유저 포인트 잔액 |
 | `shop_roles` | 포인트로 구매 가능한 역할과 가격 |
 | `nickname_history` | 닉네임 변경 이력 (old→new, 변경자·시각) |
-| `spectators` | 모집별 관전자 + 관전 시작 시점의 원본 닉네임 |
+| `spectators` | (구버전·미사용) 모집별 관전자. 013에서 전역 `spectator_mode`로 대체 |
+| `spectator_mode` | 전역 관전 모드 상태 (켠 사람·원본 닉) |
 | `blacklist` | 디스코드 ID 기반 차단 목록 (사유·등록자·네이티브밴 여부) |
 | `member_entry` | 멤버 입장 경로 기록 (kakao/discord/vanity/unknown) |
 | `sticky_messages` | 채널별 스티키 공지 (내용·현재 메시지 ID·on/off) |
@@ -352,6 +365,7 @@ CREATE INDEX IF NOT EXISTS idx_openchat_requests_pending
 | `010_entry_dual_security.sql` | `member_entry` 테이블 + 오픈채팅/카카오 관련 4개 컬럼 |
 | `011_sticky_messages.sql` | `sticky_messages` 테이블 (스티키 공지) |
 | `012_openchat_approval.sql` | `openchat_requests` 테이블 + 오픈채팅 운영자 승인제 컬럼 2개 |
+| `013_spectator_mode.sql` | `spectator_mode` 테이블 + `spectator_role_id`·`recruits.created_at` (전역 관전 모드) |
 
 > `002~005`, `007~011` 은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문이라 **재실행해도 안전**해요.
 > ⚠️ 단 `006` 은 값 변환(`÷6`)이 들어 있어 **한 번만 실행**해야 해요. 다시 실행하면 포인트가 또 나눠져요. (각 마이그레이션은 순서대로 1회씩만 실행하면 됩니다.)
@@ -437,7 +451,8 @@ discord-party-bot/
 │   ├── 009_blacklist.sql
 │   ├── 010_entry_dual_security.sql
 │   ├── 011_sticky_messages.sql
-│   └── 012_openchat_approval.sql
+│   ├── 012_openchat_approval.sql
+│   └── 013_spectator_mode.sql
 ├── requirements.txt
 ├── Procfile                # Railway 실행 설정 (worker: python bot.py)
 ├── runtime.txt

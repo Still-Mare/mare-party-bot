@@ -5,10 +5,14 @@
 - 봇 시작 시 이미 음성방에 있던 사람도 세션 시작 처리
 """
 
+import logging
+
 import discord
 from discord.ext import commands
 
 import database as db
+
+log = logging.getLogger("party-bot")
 
 
 def fmt_duration(seconds: int) -> str:
@@ -79,29 +83,33 @@ class VoiceStats(commands.Cog):
                 await db.voice_join(guild.id, member.id)
             # 일반→일반 또는 잠수→잠수: 세션 유지 (입장시각 리셋 방지)
 
-        # ── 관전자가 모집 음성방을 떠났으면 관전 종료(닉 복원·권한 회수) ──
-        if before.channel is not None and before.channel != after.channel:
-            await self._handle_spectator_leave(member, before.channel)
+        # ── 관전 모드인 사람이 음성에서 완전히 나가면 관전 모드 자동 OFF (깜빡 방지) ──
+        # 실패해도 아래의 음성방 비움 정리(_check_empty_recruit_voice)가 끊기지 않게 격리한다.
+        if after.channel is None and before.channel is not None:
+            try:
+                if await db.is_in_spectator_mode(guild.id, member.id):
+                    from cogs.recruitment import exit_spectator_mode_flow
+                    await exit_spectator_mode_flow(guild, member)
+            except Exception as e:
+                log.warning(f"관전 모드 자동 OFF 실패 user={member.id}: {e}")
+
+        # ── 모집 음성방 멤버십이 바뀌면 그 모집글의 관전자 목록을 갱신 ──
+        if before.channel != after.channel:
+            await self._refresh_recruit_for_voice(before.channel)
+            await self._refresh_recruit_for_voice(after.channel)
 
         # ── 모집용 음성방이 비었는지 확인 ──
         if before.channel is not None:
             await self._check_empty_recruit_voice(before.channel)
 
-    async def _handle_spectator_leave(self, member, channel):
-        """관전자가 모집 음성방을 떠나면 관전 종료 처리(닉 복원·권한 회수)."""
+    async def _refresh_recruit_for_voice(self, channel):
+        """음성 채널이 모집 음성방이면 그 모집글을 다시 그려 관전자 목록을 갱신한다."""
         if not isinstance(channel, discord.VoiceChannel):
             return
         recruit_id = await db.find_recruit_by_voice(channel.id)
-        if recruit_id is None:
-            return
-        if not await db.is_spectator(recruit_id, member.id):
-            return
-        recruit = await db.get_recruit(recruit_id)
-        if not recruit:
-            return
-        from cogs.recruitment import stop_spectate, refresh_recruit_message
-        await stop_spectate(member.guild, recruit, member)
-        await refresh_recruit_message(self.bot, recruit_id)
+        if recruit_id is not None:
+            from cogs.recruitment import refresh_recruit_message
+            await refresh_recruit_message(self.bot, recruit_id)
 
     async def _check_empty_recruit_voice(self, channel):
         """모집용 음성방이 비었으면 삭제하고 모집글을 아카이브한다."""
