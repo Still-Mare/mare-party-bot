@@ -115,6 +115,21 @@ class PartyBot(commands.Bot):
 
             log.info(f"길드별 슬래시 명령어 즉시 동기화 완료 ({len(self.guilds)}개 길드) — 글로벌 명령어 정리됨")
 
+    async def on_guild_join(self, guild: discord.Guild):
+        """새 서버 초대 시 그 서버에 즉시 슬래시 명령어를 동기화한다.
+
+        on_ready는 시작 시점의 서버(self.guilds)에만 sync하므로, 봇 가동 중
+        초대된 서버는 누락된다. 길드 단위 sync는 글로벌 일일 레이트 리밋과
+        별개라 SYNC_COMMANDS 값과 무관하게 안전하다.
+        """
+        log.info(f"새 서버 입장: {guild.name} (ID: {guild.id}) — 명령어 동기화 시작")
+        try:
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            log.info(f"새 서버 '{guild.name}' 슬래시 명령어 동기화 완료")
+        except Exception:
+            log.exception(f"새 서버 '{guild.name}' 명령어 동기화 실패")
+
     async def close(self):
         """봇 종료 시 DB 커넥션 풀을 정리한다."""
         await db.close_db()
