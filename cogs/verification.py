@@ -98,6 +98,9 @@ class VerifyView(ui.View):
                         await user.add_roles(grole, reason="오픈채팅 게이트 통과")
                     except discord.HTTPException:
                         note = "\n⚠️ 역할 부여에 실패했어요 — 운영진에게 문의해주세요."
+            # 뉴비 게이트: 게이트를 통과했으면 뉴비 역할 제거 → '권한받기' 채널이 사라짐
+            from cogs.entry_tracking import remove_newbie_role
+            await remove_newbie_role(user, settings)
             await interaction.followup.send(url_msg + note, ephemeral=True)
             return
 

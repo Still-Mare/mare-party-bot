@@ -227,6 +227,10 @@ class ChannelSettingSelect(ui.Select):
                     description="닉네임 변경 로그를 남길 관리자 채널을 지정해요",
                 ),
                 discord.SelectOption(
+                    label="출입로그 채널 지정", value="set_entry_log", emoji="📜",
+                    description="입장/퇴장을 실시간으로 올릴 관리자 채널을 지정해요",
+                ),
+                discord.SelectOption(
                     label="스티키 공지 설정", value="set_sticky", emoji="📌",
                     description="채널 하단에 고정되는 운영자 공지를 설정/수정/해제해요",
                 ),
@@ -271,6 +275,13 @@ class ChannelSettingSelect(ui.Select):
                 "닉네임 변경 로그를 남길 채널을 선택하세요. (관리자만 보이는 채널 권장)",
                 view=NickLogChannelSelectView(), ephemeral=True,
             )
+        elif value == "set_entry_log":
+            from cogs.entry_tracking import EntryLogChannelSelectView
+            await interaction.response.send_message(
+                "입장/퇴장이 실시간으로 올라올 채널을 선택하세요. (관리자만 보이는 채널 권장)\n"
+                "안 정해도 관리자 패널의 '출입로그 보기'로 조회·검색은 할 수 있어요.",
+                view=EntryLogChannelSelectView(), ephemeral=True,
+            )
         elif value == "set_sticky":
             from cogs.sticky import StickyManageView
             await interaction.response.send_message(
@@ -312,6 +323,10 @@ class RoleStatsSelect(ui.Select):
                     label="닉네임 변경 이력 보기", value="nick_history", emoji="✏️",
                     description="특정 유저의 닉네임 변경 이력을 조회해요",
                 ),
+                discord.SelectOption(
+                    label="출입로그 보기", value="entry_log", emoji="📜",
+                    description="입장/퇴장 기록을 별명으로 조회·검색해요 (나간 사람도)",
+                ),
             ],
         )
 
@@ -351,6 +366,16 @@ class RoleStatsSelect(ui.Select):
             await interaction.response.send_message(
                 "닉네임 변경 이력을 볼 유저를 선택하세요.",
                 view=NickHistoryUserSelectView(), ephemeral=True,
+            )
+        elif value == "entry_log":
+            from cogs.entry_tracking import EntryLogView, build_entry_log_view_embed
+            await interaction.response.defer(ephemeral=True)
+            rows = await db.get_entry_log(interaction.guild.id, limit=15)
+            embed = build_entry_log_view_embed(
+                rows, title="📜 최근 출입로그", footer=f"최근 {len(rows)}건",
+            )
+            await interaction.followup.send(
+                embed=embed, view=EntryLogView(), ephemeral=True,
             )
 
 

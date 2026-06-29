@@ -21,10 +21,12 @@
 | 📨 익명 건의함 | 버튼 → 모달로 익명 건의 → 관리자 채널 게시. 작성자는 서버 주인만 확인 가능 |
 | 🕊️ 잠수 신고 | 활동검토 면제 신청 (3일/1주/2주/1개월 또는 날짜 직접 입력). 관리자 승인식 |
 | 🔐 입장 이중보안 | 카카오 오픈채팅 URL을 채널에 안 올리고, 인증 통과자에게만 본인에게만 보이는 메시지로 전달 → 초대코드 정지 회피. 카카오/디스코드 유입 경로 자동 구분. (선택) 운영자 승인제 — 신청 → 운영자가 카톡 입장 확인 후 승인 |
+| 🐣 뉴비 게이트 | 입장 시 '뉴비' 역할 자동 부여(봇이 역할 자동 생성) → 지정한 '권한받기' 채널만 보임. 오픈채팅 승인(역할 지급) 시 뉴비 역할 자동 제거 → 권한받기 채널이 사라지고 나머지가 보임 (선택 on/off) |
 | 🚫 블랙리스트 | 디스코드 고유 ID 기반 차단. 이미 나간 유저도 ID로 등록해 재입장 차단(강퇴/밴 토글, 네이티브 밴 옵션) |
 | 👀 관전 모드 | 전용 패널에서 [관전 모드 켜기] → 닉 "관전" 표시 + 모든 파티 음성방 자유 입장(정원 무관). 참가 중이면 자동 탈퇴(모집자는 자동 위임), 음성 퇴장 시 자동 OFF |
 | ✏️ 셀프 닉네임 | 서버가 별명 변경을 막아둬도 봇이 대신 변경. old→new 변경 이력 기록·조회 |
 | 📌 스티키 공지 | 운영자 공지를 채널 맨 아래에 항상 고정 (새 글이 올라오면 자동 재게시) |
+| 📜 출입로그 | 입장/퇴장을 별명(서버 닉네임)과 함께 기록. 나간 사람도 "최근까지 쓰던 별명"으로 표시. 실시간 로그 채널 + 관리자 패널에서 별명 검색 |
 
 ---
 
@@ -153,7 +155,11 @@ CREATE TABLE IF NOT EXISTS guild_settings (
     entry_marker_role_id        BIGINT,              -- 카카오 유입자 마커 역할 (010)
     openchat_approval_required  SMALLINT NOT NULL DEFAULT 0,  -- 오픈채팅 운영자 승인제 on/off (012)
     openchat_request_channel_id BIGINT,              -- 오픈채팅 신청을 받을 운영자 채널 (012)
-    spectator_role_id           BIGINT               -- 관전자 역할 (자동 생성, 관전 모드용) (013)
+    spectator_role_id           BIGINT,              -- 관전자 역할 (자동 생성, 관전 모드용) (013)
+    entry_log_channel_id        BIGINT,              -- 출입로그(입장/퇴장) 실시간 게시 채널 (014)
+    newbie_role_id              BIGINT,              -- 입장 시 부여하는 뉴비 역할 (자동 생성) (015)
+    newbie_gate_enabled         SMALLINT NOT NULL DEFAULT 0,  -- 뉴비 게이트 on/off (015)
+    newbie_gate_channel_id      BIGINT               -- '권한받기' 채널 (뉴비만 보이게) (015)
 );
 
 -- ─── 활동 경고 누적 ──────────────────────────────
@@ -247,6 +253,18 @@ CREATE TABLE IF NOT EXISTS member_entry (
     PRIMARY KEY (guild_id, user_id)
 );
 
+-- ─── 출입로그 (014) ──────────────────────────────
+-- display_name 을 이벤트 시점에 저장 → 나간 사람도 "최근까지 쓰던 별명"으로 표시
+CREATE TABLE IF NOT EXISTS entry_log (
+    id           BIGSERIAL   PRIMARY KEY,
+    guild_id     BIGINT      NOT NULL,
+    user_id      BIGINT      NOT NULL,
+    display_name TEXT        NOT NULL,
+    action       TEXT        NOT NULL,            -- join | leave
+    route_label  TEXT,                            -- 입장 경로 · 퇴장 시 NULL
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- ─── 스티키 공지 (011) ───────────────────────────
 CREATE TABLE IF NOT EXISTS sticky_messages (
     guild_id        BIGINT      NOT NULL,
@@ -294,6 +312,11 @@ CREATE INDEX IF NOT EXISTS idx_blacklist_guild ON blacklist (guild_id);
 
 CREATE INDEX IF NOT EXISTS idx_member_entry_route
     ON member_entry (guild_id, route_label);
+
+CREATE INDEX IF NOT EXISTS idx_entry_log_guild_time
+    ON entry_log (guild_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entry_log_name
+    ON entry_log (guild_id, lower(display_name));
 
 CREATE INDEX IF NOT EXISTS idx_sticky_messages_enabled
     ON sticky_messages (guild_id)
@@ -344,6 +367,7 @@ CREATE TABLE IF NOT EXISTS spectator_mode (
 | `spectator_mode` | 전역 관전 모드 상태 (켠 사람·원본 닉) |
 | `blacklist` | 디스코드 ID 기반 차단 목록 (사유·등록자·네이티브밴 여부) |
 | `member_entry` | 멤버 입장 경로 기록 (kakao/discord/vanity/unknown) |
+| `entry_log` | 출입로그 — 입장/퇴장 이벤트 + 이벤트 시점 별명 (나간 사람 조회용) |
 | `sticky_messages` | 채널별 스티키 공지 (내용·현재 메시지 ID·on/off) |
 | `openchat_requests` | 오픈채팅 입장 신청 (승인제 ON일 때 운영자 승인 대기열) |
 
@@ -366,8 +390,10 @@ CREATE TABLE IF NOT EXISTS spectator_mode (
 | `011_sticky_messages.sql` | `sticky_messages` 테이블 (스티키 공지) |
 | `012_openchat_approval.sql` | `openchat_requests` 테이블 + 오픈채팅 운영자 승인제 컬럼 2개 |
 | `013_spectator_mode.sql` | `spectator_mode` 테이블 + `spectator_role_id`·`recruits.created_at` (전역 관전 모드) |
+| `014_entry_log.sql` | `entry_log` 테이블 + `entry_log_channel_id` 컬럼 (출입로그) |
+| `015_newbie_gate.sql` | `newbie_role_id`·`newbie_gate_enabled`·`newbie_gate_channel_id` 컬럼 (뉴비 게이트) |
 
-> `002~005`, `007~011` 은 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문이라 **재실행해도 안전**해요.
+> `002~005`, `007~015` 는 `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` 구문이라 **재실행해도 안전**해요.
 > ⚠️ 단 `006` 은 값 변환(`÷6`)이 들어 있어 **한 번만 실행**해야 해요. 다시 실행하면 포인트가 또 나눠져요. (각 마이그레이션은 순서대로 1회씩만 실행하면 됩니다.)
 
 ---
@@ -438,7 +464,7 @@ discord-party-bot/
 │   ├── nicknames.py        # 셀프 닉네임 변경 + 변경 이력
 │   ├── nick_util.py        # 닉네임 접두사·복원 공용 헬퍼 (관전/셀프닉 공유)
 │   ├── blacklist.py        # 블랙리스트 (ID 차단, on_member_join)
-│   ├── entry_tracking.py   # 입장 경로 구분 + 오픈채팅 게이트 설정
+│   ├── entry_tracking.py   # 입장 경로 구분 + 오픈채팅 게이트 + 출입로그(입장/퇴장)
 │   └── sticky.py           # 스티키 공지 (채널 하단 고정)
 ├── migrations/
 │   ├── 002_add_suggestions_and_leave_notices.sql
@@ -452,7 +478,9 @@ discord-party-bot/
 │   ├── 010_entry_dual_security.sql
 │   ├── 011_sticky_messages.sql
 │   ├── 012_openchat_approval.sql
-│   └── 013_spectator_mode.sql
+│   ├── 013_spectator_mode.sql
+│   ├── 014_entry_log.sql
+│   └── 015_newbie_gate.sql
 ├── requirements.txt
 ├── Procfile                # Railway 실행 설정 (worker: python bot.py)
 ├── runtime.txt

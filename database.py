@@ -31,6 +31,10 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
     "openchat_approval_required", "openchat_request_channel_id",
     # 013 전역 관전 모드
     "spectator_role_id",
+    # 014 출입로그
+    "entry_log_channel_id",
+    # 015 뉴비 게이트
+    "newbie_role_id", "newbie_gate_enabled", "newbie_gate_channel_id",
 })
 
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
@@ -365,7 +369,9 @@ async def get_settings(guild_id):
                       openchat_url, openchat_gate_role_id,
                       kakao_invite_code, entry_marker_role_id,
                       openchat_approval_required, openchat_request_channel_id,
-                      spectator_role_id
+                      spectator_role_id,
+                      entry_log_channel_id,
+                      newbie_role_id, newbie_gate_enabled, newbie_gate_channel_id
                FROM guild_settings WHERE guild_id = $1""",
             guild_id,
         )
@@ -382,6 +388,9 @@ async def get_settings(guild_id):
             "kakao_invite_code": None, "entry_marker_role_id": None,
             "openchat_approval_required": 0, "openchat_request_channel_id": None,
             "spectator_role_id": None,
+            "entry_log_channel_id": None,
+            "newbie_role_id": None, "newbie_gate_enabled": 0,
+            "newbie_gate_channel_id": None,
         }
     return {
         "voice_category_id": r["voice_category_id"],
@@ -403,6 +412,10 @@ async def get_settings(guild_id):
         "openchat_approval_required": r["openchat_approval_required"],
         "openchat_request_channel_id": r["openchat_request_channel_id"],
         "spectator_role_id": r["spectator_role_id"],
+        "entry_log_channel_id": r["entry_log_channel_id"],
+        "newbie_role_id": r["newbie_role_id"],
+        "newbie_gate_enabled": r["newbie_gate_enabled"],
+        "newbie_gate_channel_id": r["newbie_gate_channel_id"],
     }
 
 
@@ -925,6 +938,74 @@ async def get_route_stats(guild_id: int) -> dict:
             guild_id,
         )
     return {r["route_label"]: r["cnt"] for r in rows}
+
+
+# ─────────────────────── 014 출입로그 ───────────────────────
+def _escape_like(text: str) -> str:
+    r"""ILIKE 검색어에서 와일드카드(%, _)와 이스케이프 문자(\)를 리터럴로 처리."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def set_entry_log_channel(guild_id: int, channel_id):
+    """출입로그를 자동 게시할 채널. None 이면 채널 게시 비활성(패널 조회만)."""
+    await _upsert_setting(guild_id, "entry_log_channel_id", channel_id)
+
+
+async def record_entry_log(guild_id: int, user_id: int, display_name: str,
+                           action: str, route_label=None):
+    """입장/퇴장 이벤트 1건 기록. display_name 은 이벤트 시점의 별명(나간 뒤 조회 불가 대비)."""
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO entry_log (guild_id, user_id, display_name, action, route_label)
+               VALUES ($1, $2, $3, $4, $5)""",
+            guild_id, user_id, display_name, action, route_label,
+        )
+
+
+def _entry_row(r) -> dict:
+    return {
+        "id": r["id"], "user_id": r["user_id"], "display_name": r["display_name"],
+        "action": r["action"], "route_label": r["route_label"], "created_at": r["created_at"],
+    }
+
+
+async def get_entry_log(guild_id: int, limit: int = 15) -> list:
+    """최근 출입 이벤트 목록 (최신순)."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT id, user_id, display_name, action, route_label, created_at
+               FROM entry_log WHERE guild_id = $1
+               ORDER BY id DESC LIMIT $2""",
+            guild_id, limit,
+        )
+    return [_entry_row(r) for r in rows]
+
+
+async def search_entry_log(guild_id: int, query: str, limit: int = 25) -> list:
+    """별명으로 출입 이벤트 검색 (대소문자 무시, 부분일치, 최신순)."""
+    pattern = f"%{_escape_like(query)}%"
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            r"""SELECT id, user_id, display_name, action, route_label, created_at
+                FROM entry_log
+                WHERE guild_id = $1 AND display_name ILIKE $2 ESCAPE '\'
+                ORDER BY id DESC LIMIT $3""",
+            guild_id, pattern, limit,
+        )
+    return [_entry_row(r) for r in rows]
+
+
+# ─────────────────────── 015 뉴비 게이트 ───────────────────────
+async def set_newbie_role(guild_id: int, role_id):
+    await _upsert_setting(guild_id, "newbie_role_id", role_id)
+
+
+async def set_newbie_gate_enabled(guild_id: int, enabled: bool):
+    await _upsert_setting(guild_id, "newbie_gate_enabled", 1 if enabled else 0)
+
+
+async def set_newbie_gate_channel(guild_id: int, channel_id):
+    await _upsert_setting(guild_id, "newbie_gate_channel_id", channel_id)
 
 
 async def set_openchat_url(guild_id: int, url):
