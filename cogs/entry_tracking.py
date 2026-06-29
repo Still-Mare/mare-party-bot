@@ -23,8 +23,21 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import nick_util
 
 log = logging.getLogger("party-bot")
+
+# 경로 라벨 → 사람이 읽기 쉬운 표시 (출입로그/통계 공용)
+ROUTE_DISPLAY = {
+    "kakao": "🟡 카카오",
+    "discord": "🔷 디스코드",
+    "vanity": "🌐 맞춤 URL",
+    "unknown": "❓ 미상",
+}
+
+
+def _fmt_route(route_label) -> str:
+    return ROUTE_DISPLAY.get(route_label, "❓ 미상")
 
 
 def parse_invite_code(raw: str) -> str | None:
@@ -49,6 +62,69 @@ async def _fetch_invite_uses(guild) -> dict | None:
 
 def _is_admin(interaction: discord.Interaction) -> bool:
     return interaction.user.guild_permissions.manage_guild
+
+
+# ───────── 뉴비 게이트 (입장 시 부여 → 게이트 통과 시 제거) ─────────
+async def ensure_newbie_role(guild):
+    """길드 '뉴비' 역할 반환. 없으면 생성해 저장. 실패 시 None."""
+    settings = await db.get_settings(guild.id)
+    rid = settings.get("newbie_role_id")
+    if rid:
+        role = guild.get_role(rid)
+        if role:
+            return role
+    try:
+        role = await guild.create_role(
+            name="🐣 뉴비", reason="뉴비 게이트용 역할", mentionable=False
+        )
+    except discord.HTTPException:
+        return None
+    await db.set_newbie_role(guild.id, role.id)
+    return role
+
+
+async def grant_newbie_role(member, settings: dict) -> None:
+    """입장한 멤버에게 뉴비 역할 부여 (게이트가 켜져 있을 때만). 실패는 조용히 무시."""
+    if not settings.get("newbie_gate_enabled"):
+        return
+    role = await ensure_newbie_role(member.guild)
+    if role and role not in member.roles:
+        try:
+            await member.add_roles(role, reason="뉴비 게이트: 입장")
+        except discord.HTTPException:
+            pass
+
+
+async def remove_newbie_role(member, settings: dict) -> None:
+    """게이트 통과(승인/오픈채팅 역할 지급) 시 뉴비 역할 제거 → '권한받기' 채널이 사라진다."""
+    rid = settings.get("newbie_role_id")
+    if not rid or member is None:
+        return
+    role = member.guild.get_role(rid)
+    if role and role in member.roles:
+        try:
+            await member.remove_roles(role, reason="뉴비 게이트: 오픈채팅 승인 통과")
+        except discord.HTTPException:
+            pass
+
+
+async def apply_newbie_gate_channel(channel, newbie_role) -> tuple[bool, str | None]:
+    """'권한받기' 채널을 뉴비만 보이도록 설정 (뉴비 보기 허용 + @everyone 보기 차단)."""
+    guild = channel.guild
+    try:
+        await channel.set_permissions(
+            newbie_role, view_channel=True, read_message_history=True,
+            reason="뉴비 게이트: 권한받기 채널은 뉴비에게만 보이게",
+        )
+        await channel.set_permissions(
+            guild.default_role, view_channel=False,
+            reason="뉴비 게이트: 권한받기 채널은 뉴비에게만 보이게",
+        )
+        return (True, None)
+    except discord.Forbidden:
+        return (False, "봇에 '역할 관리(Manage Roles)' 권한이 없거나 봇 역할이 뉴비 역할보다 아래예요.")
+    except discord.HTTPException as e:
+        return (False, f"디스코드 API 오류: {e}")
 
 
 def build_entry_settings_embed() -> discord.Embed:
@@ -100,6 +176,16 @@ def build_entry_settings_embed() -> discord.Embed:
             "켜면 `[오픈채팅 입장하기]`가 **즉시 역할**이 아니라 **운영자 승인 신청**으로 바뀌어요.\n"
             "신청은 '신청 받을 채널'에 [승인][거절] 버튼으로 올라가고, 운영자가 카톡 입장을 "
             "확인하고 승인하면 그때 역할이 부여돼요. (기본은 꺼짐)"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="🐣 뉴비 게이트 + 권한받기 채널  ·  선택(on/off)",
+        value=(
+            "켜면 **입장하는 사람에게 자동으로 '뉴비' 역할**을 줘요. '권한받기 채널'을 지정하면 "
+            "봇이 그 채널을 **뉴비에게만 보이도록** 설정해요.\n"
+            "오픈채팅 승인(역할 지급)이 되면 뉴비 역할이 자동으로 빠져서 권한받기 채널이 사라지고 "
+            "나머지 채널이 보여요. (나머지 채널은 오픈채팅 인증 역할에게만 보이게 서버에서 설정해두세요.)"
         ),
         inline=False,
     )
@@ -260,6 +346,9 @@ class OpenChatReviewView(ui.View):
                         note = " (역할 부여 실패 — 봇 권한/역할 위치 확인 필요)"
             else:
                 note = " (※ '오픈채팅 인증 역할'이 설정 안 돼 있어 줄 역할이 없어요)"
+            # 뉴비 게이트: 승인되면 뉴비 역할을 빼서 '권한받기' 채널이 사라지게
+            if member:
+                await remove_newbie_role(member, settings)
             if member:
                 try:
                     await member.send(f"**{guild.name}** 오픈채팅 입장 신청이 **승인**됐어요! 환영해요 🎉")
@@ -346,6 +435,50 @@ class RequestChannelSelectView(ui.View):
     def __init__(self):
         super().__init__(timeout=120)
         self.add_item(RequestChannelSelect())
+
+
+class NewbieGateChannelSelect(ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="'권한받기' 채널 선택 (뉴비만 보이게 설정)",
+            channel_types=[discord.ChannelType.text],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        channel = self.values[0].resolve() or await self.values[0].fetch()
+        role = await ensure_newbie_role(interaction.guild)
+        if role is None:
+            await interaction.followup.send(
+                "뉴비 역할을 만들지 못했어요. 봇에 '역할 관리(Manage Roles)' 권한이 있는지 확인해주세요.",
+                ephemeral=True,
+            )
+            return
+        await db.set_newbie_gate_channel(interaction.guild.id, channel.id)
+        ok, err = await apply_newbie_gate_channel(channel, role)
+        if ok:
+            await interaction.followup.send(
+                f"✅ {channel.mention} 을 '권한받기' 채널로 정하고, **{role.mention} 만 보이도록** 설정했어요.\n"
+                "이제 입장하면 뉴비 역할이 자동 부여돼 이 채널만 보이고, 오픈채팅 승인으로 역할을 받으면 "
+                "뉴비 역할이 빠지면서 이 채널이 사라져요.\n"
+                "※ 나머지 채널은 오픈채팅 인증 역할에게만 보이도록 서버에서 설정해두면 완성돼요.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                f"채널은 '권한받기' 채널로 저장했지만 권한 설정에 실패했어요: {err}\n"
+                f"봇 역할을 {role.mention} 보다 위로 올린 뒤 다시 지정해주세요.",
+                ephemeral=True,
+            )
+
+
+class NewbieGateChannelSelectView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(NewbieGateChannelSelect())
 
 
 class EntrySettingsView(ui.View):
@@ -456,6 +589,189 @@ class EntrySettingsView(ui.View):
             view=RequestChannelSelectView(), ephemeral=True,
         )
 
+    @ui.button(label="뉴비 게이트 켜기/끄기", emoji="🐣", style=discord.ButtonStyle.danger, row=4)
+    async def toggle_newbie_gate(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        settings = await db.get_settings(interaction.guild.id)
+        new_val = not bool(settings.get("newbie_gate_enabled"))
+        await db.set_newbie_gate_enabled(interaction.guild.id, new_val)
+        msg = ""
+        if new_val:
+            role = await ensure_newbie_role(interaction.guild)
+            role_txt = role.mention if role else "(생성 실패 — '역할 관리' 권한 확인)"
+            msg = (
+                f"🐣 뉴비 게이트를 **켰어요**. 이제 입장하면 {role_txt} 역할이 자동 부여돼요.\n"
+                "오픈채팅 승인(또는 승인제 OFF면 [오픈채팅 입장하기] 통과) 시 뉴비 역할이 자동으로 빠져요."
+            )
+            if not settings.get("newbie_gate_channel_id"):
+                msg += "\n⚠️ 아직 '권한받기 채널'을 안 정했어요 — 아래 버튼으로 지정하면 그 채널만 뉴비에게 보여요."
+        else:
+            msg = ("🐣 뉴비 게이트를 **껐어요**. 더 이상 입장 시 뉴비 역할을 부여하지 않아요.\n"
+                   "(이미 부여된 역할/채널 권한은 그대로 남아요 — 필요하면 직접 정리해주세요.)")
+        await interaction.followup.send(msg, ephemeral=True)
+
+    @ui.button(label="권한받기 채널 지정", emoji="🚪", style=discord.ButtonStyle.secondary, row=4)
+    async def set_newbie_channel(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "뉴비에게만 보일 '권한받기' 채널(인증/오픈채팅 버튼이 있는 채널)을 선택하세요.\n"
+            "선택하면 봇이 그 채널을 **뉴비만 보이도록** 자동 설정해요.",
+            view=NewbieGateChannelSelectView(), ephemeral=True,
+        )
+
+
+# ───────── 출입로그 (입장/퇴장) ─────────
+from datetime import timezone, timedelta
+
+_KST = timezone(timedelta(hours=9))
+
+
+def _fmt_log_time(dt) -> str:
+    """저장된 UTC 시각을 한국시간 'MM-DD HH:MM' 으로."""
+    return dt.astimezone(_KST).strftime("%m-%d %H:%M")
+
+
+def build_entry_log_post_embed(action: str, display_name: str, route_label,
+                               user_id: int) -> discord.Embed:
+    """실시간 채널 게시용 — 입장/퇴장 1건."""
+    if action == "join":
+        embed = discord.Embed(title="🟢 입장", color=0x248046)
+        embed.add_field(name="별명", value=f"**{display_name}**", inline=True)
+        embed.add_field(name="경로", value=_fmt_route(route_label), inline=True)
+    else:
+        embed = discord.Embed(title="🔴 퇴장", color=0xED4245)
+        embed.add_field(name="별명", value=f"**{display_name}**", inline=True)
+    # 시각은 각 보는 사람의 현지시간으로 자동 표시
+    embed.add_field(
+        name="시각", value=discord.utils.format_dt(discord.utils.utcnow(), "f"), inline=False
+    )
+    embed.set_footer(text=f"ID: {user_id}")
+    return embed
+
+
+def _entry_log_lines(rows: list) -> str:
+    lines = []
+    for r in rows:
+        emoji = "🟢" if r["action"] == "join" else "🔴"
+        when = _fmt_log_time(r["created_at"])
+        name = r["display_name"] or "_(이름 없음)_"
+        route = f" · {_fmt_route(r['route_label'])}" if r["action"] == "join" else ""
+        lines.append(f"{emoji} `{when}` **{name}**{route}")
+    return "\n".join(lines)
+
+
+def build_entry_log_view_embed(rows: list, *, title: str, footer: str) -> discord.Embed:
+    embed = discord.Embed(title=title, color=0x5865F2)
+    if not rows:
+        embed.description = "기록이 없어요."
+    else:
+        embed.description = _entry_log_lines(rows)
+    embed.set_footer(text=footer + " · 시각은 한국시간(KST)")
+    return embed
+
+
+async def post_entry_log(guild, settings: dict, action: str, display_name: str,
+                         route_label, user_id: int) -> None:
+    """설정된 출입로그 채널에 게시. 채널 미설정/권한 없음이면 조용히 생략."""
+    ch_id = settings.get("entry_log_channel_id")
+    if not ch_id:
+        return
+    channel = guild.get_channel(ch_id)
+    if not channel:
+        return
+    try:
+        await channel.send(
+            embed=build_entry_log_post_embed(action, display_name, route_label, user_id)
+        )
+    except discord.HTTPException:
+        pass
+
+
+class EntryLogChannelSelect(ui.ChannelSelect):
+    def __init__(self):
+        super().__init__(
+            placeholder="출입로그를 올릴 채널 선택",
+            channel_types=[discord.ChannelType.text],
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        channel = self.values[0]
+        await db.set_entry_log_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(
+            f"출입로그를 {channel.mention} 에 올리기로 했어요. "
+            "이제 누가 들어오고 나갈 때마다 별명과 함께 기록돼요. (관리자만 보이는 채널 권장)",
+            ephemeral=True,
+        )
+
+
+class EntryLogChannelSelectView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=120)
+        self.add_item(EntryLogChannelSelect())
+
+
+class EntryLogSearchModal(ui.Modal, title="출입로그 — 별명으로 검색"):
+    query = ui.TextInput(
+        label="찾을 별명 (일부만 입력해도 돼요)",
+        placeholder="예: 홍길동",
+        max_length=50,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        q = str(self.query).strip()
+        rows = await db.search_entry_log(interaction.guild.id, q, limit=25)
+        embed = build_entry_log_view_embed(
+            rows, title=f"🔍 '{q}' 검색 결과", footer=f"{len(rows)}건",
+        )
+        await interaction.followup.send(embed=embed, view=EntryLogView(), ephemeral=True)
+
+
+class EntryLogView(ui.View):
+    """관리자: 최근 출입로그 조회 + 별명 검색 (ephemeral)."""
+    def __init__(self):
+        super().__init__(timeout=180)
+
+    @ui.button(label="최근 출입", emoji="🔄", style=discord.ButtonStyle.secondary, row=0)
+    async def recent(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.defer(ephemeral=True)
+        rows = await db.get_entry_log(interaction.guild.id, limit=15)
+        embed = build_entry_log_view_embed(
+            rows, title="📜 최근 출입로그", footer=f"최근 {len(rows)}건",
+        )
+        await interaction.followup.send(embed=embed, view=EntryLogView(), ephemeral=True)
+
+    @ui.button(label="별명으로 검색", emoji="🔍", style=discord.ButtonStyle.primary, row=0)
+    async def search(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.send_modal(EntryLogSearchModal())
+
+    @ui.button(label="로그 채널 지정", emoji="📺", style=discord.ButtonStyle.secondary, row=1)
+    async def set_channel(self, interaction: discord.Interaction, button: ui.Button):
+        if not _is_admin(interaction):
+            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "입장/퇴장이 실시간으로 올라올 채널을 선택하세요. (선택 — 안 정해도 패널 조회는 돼요)",
+            view=EntryLogChannelSelectView(), ephemeral=True,
+        )
+
 
 # ───────── 입장 경로 추적 Cog ─────────
 class EntryTracking(commands.Cog):
@@ -534,6 +850,15 @@ class EntryTracking(commands.Cog):
         used_code, route = await self._detect_route(guild, kakao_code)
         await db.record_member_entry(guild.id, member.id, used_code, route)
 
+        # 출입로그: 입장 기록 + (채널 설정 시) 실시간 게시.
+        # 별명은 관전 접두사를 뗀 베이스로 저장(입장 시점엔 보통 username).
+        display = nick_util.current_base_nick(member)
+        await db.record_entry_log(guild.id, member.id, display, "join", route)
+        await post_entry_log(guild, settings, "join", display, route, member.id)
+
+        # 뉴비 게이트: 켜져 있으면 입장자에게 뉴비 역할 부여 → '권한받기' 채널만 보이게
+        await grant_newbie_role(member, settings)
+
         if route == "kakao" and marker_role_id:
             role = guild.get_role(marker_role_id)
             if role:
@@ -541,6 +866,21 @@ class EntryTracking(commands.Cog):
                     await member.add_roles(role, reason="카카오 유입 마커")
                 except discord.HTTPException:
                     pass
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        if member.bot:
+            return
+        guild = member.guild
+        # 블랙리스트 강퇴/밴으로 나간 경우는 출입로그를 남기지 않는다.
+        # (블랙리스트 패널이 별도로 기록하고, 입장 로그도 생략했으므로 일관성 유지)
+        if await db.is_blacklisted(guild.id, member.id):
+            return
+        # 나간 사람은 이후 user_id 로 닉을 조회할 수 없으므로, 지금의 별명을 보존한다.
+        display = nick_util.current_base_nick(member)
+        await db.record_entry_log(guild.id, member.id, display, "leave")
+        settings = await db.get_settings(guild.id)
+        await post_entry_log(guild, settings, "leave", display, None, member.id)
 
 
 async def setup(bot):
