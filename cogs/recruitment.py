@@ -229,7 +229,12 @@ async def refresh_recruit_message(bot, recruit_id: int):
         total_count=len(user_ids), spectator_members=spectators,
     )
     view = None if recruit["status"] == "closed" else RecruitView(recruit_id)
-    await msg.edit(embed=embed, view=view)
+    try:
+        await msg.edit(embed=embed, view=view)
+    except discord.NotFound:
+        # fetch 이후 다른 경로(예: 음성방 전원 퇴장으로 인한 자동 아카이브)가
+        # 메시지를 먼저 삭제한 경우 — 이미 처리된 상태이므로 무시한다.
+        pass
 
 
 # ───────── 전역 관전 모드 ─────────
