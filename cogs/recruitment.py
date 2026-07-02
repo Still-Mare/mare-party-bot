@@ -149,6 +149,8 @@ async def grant_voice_access(guild, recruit, member):
     vc = guild.get_channel(recruit["voice_channel_id"])
     if not vc:
         return
+    if vc.overwrites_for(member).connect is True:
+        return  # 이미 정상 — 참가 버튼 반복 클릭 시 불필요한 API 호출 방지
     try:
         await vc.set_permissions(member, connect=True, reason="파티 참가")
     except Exception:
@@ -516,7 +518,15 @@ class RecruitView(ui.View):
             await interaction.followup.send("이미 인원이 다 찼어요.", ephemeral=True)
             return
         if result == "already_joined":
-            await interaction.followup.send("이미 참가 중이에요.", ephemeral=True)
+            # 이미 참가 중이지만, 이 수정 이전에 만들어진 방이라면 입장 권한이
+            # 아직도 누락돼 있을 수 있으므로 다시 동기화해준다.
+            recruit = await db.get_recruit(self.recruit_id)
+            if recruit:
+                await grant_temp_role(interaction.guild, recruit, interaction.user)
+                await grant_voice_access(interaction.guild, recruit, interaction.user)
+            await interaction.followup.send(
+                "이미 참가 중이에요. (입장 권한을 다시 확인했어요)", ephemeral=True
+            )
             return
 
         # 참가 성공 — 역할 부여 (recruit 재조회로 최신 temp_role_id 반영)
