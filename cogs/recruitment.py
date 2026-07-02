@@ -121,8 +121,8 @@ async def grant_temp_role(guild, recruit, member):
     if role and role not in member.roles:
         try:
             await member.add_roles(role, reason="파티 참가")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"임시 역할 부여 실패 — 모집 #{recruit['id']} {member} ({member.id}): {e!r}")
 
 
 async def revoke_temp_role(guild, recruit, member):
@@ -133,8 +133,8 @@ async def revoke_temp_role(guild, recruit, member):
     if role and role in member.roles:
         try:
             await member.remove_roles(role, reason="파티 참가 취소")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"임시 역할 회수 실패 — 모집 #{recruit['id']} {member} ({member.id}): {e!r}")
 
 
 async def grant_voice_access(guild, recruit, member):
@@ -148,13 +148,20 @@ async def grant_voice_access(guild, recruit, member):
         return
     vc = guild.get_channel(recruit["voice_channel_id"])
     if not vc:
+        log.warning(
+            f"grant_voice_access: 음성채널을 찾을 수 없음 — 모집 #{recruit['id']} "
+            f"voice_channel_id={recruit['voice_channel_id']} {member} ({member.id})"
+        )
         return
     if vc.overwrites_for(member).connect is True:
         return  # 이미 정상 — 참가 버튼 반복 클릭 시 불필요한 API 호출 방지
     try:
         await vc.set_permissions(member, connect=True, reason="파티 참가")
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(
+            f"음성방 개별 입장 권한 부여 실패 — 모집 #{recruit['id']} 채널 #{vc.id} "
+            f"{member} ({member.id}): {e!r}"
+        )
 
 
 async def revoke_voice_access(guild, recruit, member):
