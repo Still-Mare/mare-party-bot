@@ -46,6 +46,9 @@ class VerifyView(ui.View):
                 ephemeral=True,
             )
             return
+        # 뉴비 게이트: 인증 완료 시 기본 입장 역할(뉴비)을 제거해 인증 역할로 대체
+        from cogs.entry_tracking import remove_newbie_role
+        await remove_newbie_role(interaction.user, settings)
         await interaction.response.send_message(
             f"인증이 완료됐어요! {role.mention} 역할을 받았어요. 환영해요! 🎉",
             ephemeral=True,
