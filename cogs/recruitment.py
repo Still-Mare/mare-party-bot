@@ -137,6 +137,37 @@ async def revoke_temp_role(guild, recruit, member):
             pass
 
 
+async def grant_voice_access(guild, recruit, member):
+    """
+    이미 열린 파티 음성방에 개별 입장 권한을 직접 부여.
+    임시 역할에 걸린 connect 권한이 있으면 원래 불필요하지만,
+    이 코드 배포 이전에 만들어진 음성방(역할 권한이 없는 구버전 채널)도
+    즉시 정상 동작하도록 보강한다.
+    """
+    if not recruit["voice_channel_id"]:
+        return
+    vc = guild.get_channel(recruit["voice_channel_id"])
+    if not vc:
+        return
+    try:
+        await vc.set_permissions(member, connect=True, reason="파티 참가")
+    except Exception:
+        pass
+
+
+async def revoke_voice_access(guild, recruit, member):
+    """참가 취소자의 파티 음성방 개별 입장 권한(있다면) 회수."""
+    if not recruit["voice_channel_id"]:
+        return
+    vc = guild.get_channel(recruit["voice_channel_id"])
+    if not vc:
+        return
+    try:
+        await vc.set_permissions(member, overwrite=None, reason="파티 참가 취소")
+    except Exception:
+        pass
+
+
 async def delete_temp_role(guild, recruit):
     """모집 종료 시 임시 역할 자체를 삭제 (모든 보유자에게서 자동 제거됨)."""
     if not recruit["temp_role_id"]:
@@ -222,6 +253,7 @@ async def _handoff_host(bot, guild, recruit, host) -> str:
         await db.set_recruit_host(rid, new_host_id)
         await db.remove_participant(rid, host.id)
         await revoke_temp_role(guild, recruit, host)
+        await revoke_voice_access(guild, recruit, host)
         new_host = guild.get_member(new_host_id)
         try:
             await new_host.send(
@@ -234,6 +266,7 @@ async def _handoff_host(bot, guild, recruit, host) -> str:
         return f"'{recruit['game_name']}' 파티 모집자를 {new_host.display_name} 님에게 넘겼어요."
     # 남아있는 참가자가 없음 → 마감 (호스트 임시역할도 회수)
     await revoke_temp_role(guild, recruit, host)
+    await revoke_voice_access(guild, recruit, host)
     if recruit["voice_channel_id"]:
         await db.close_recruit(rid)
         await refresh_recruit_message(bot, rid)
@@ -271,6 +304,7 @@ async def enter_spectator_mode_flow(bot, guild, member) -> tuple[bool, str]:
             else:
                 await db.remove_participant(rid, member.id)
                 await revoke_temp_role(guild, recruit, member)
+                await revoke_voice_access(guild, recruit, member)
                 await refresh_recruit_message(bot, rid)
                 notes.append(f"'{recruit['game_name']}' 파티 참가를 취소했어요.")
 
@@ -492,6 +526,7 @@ class RecruitView(ui.View):
             if await db.is_in_spectator_mode(interaction.guild.id, interaction.user.id):
                 await exit_spectator_mode_flow(interaction.guild, interaction.user)
             await grant_temp_role(interaction.guild, recruit, interaction.user)
+            await grant_voice_access(interaction.guild, recruit, interaction.user)
 
         await interaction.followup.send("참가했어요!", ephemeral=True)
         await refresh_recruit_message(interaction.client, self.recruit_id)
@@ -512,6 +547,7 @@ class RecruitView(ui.View):
             return
         await db.remove_participant(self.recruit_id, interaction.user.id)
         await revoke_temp_role(interaction.guild, recruit, interaction.user)
+        await revoke_voice_access(interaction.guild, recruit, interaction.user)
         await interaction.response.send_message("참가를 취소했어요.", ephemeral=True)
         await refresh_recruit_message(interaction.client, self.recruit_id)
 
@@ -539,17 +575,25 @@ class RecruitView(ui.View):
             category = interaction.guild.get_channel(settings["voice_category_id"])
 
         # 참가자 + 관전자 역할만 접근 가능하게 권한 설정
-        user_ids = await db.list_participants(self.recruit_id)
         overwrites = {
             interaction.guild.default_role: discord.PermissionOverwrite(connect=False),
             interaction.guild.me: discord.PermissionOverwrite(
                 connect=True, manage_channels=True, move_members=True
             ),
         }
-        for uid in user_ids:
-            member = interaction.guild.get_member(uid)
-            if member:
-                overwrites[member] = discord.PermissionOverwrite(connect=True)
+        # 파티 전용 임시 역할에 입장 권한 부여.
+        # 참가자는 참가 시점(방 개설 이전/이후 모두)에 이 역할을 받으므로,
+        # 개별 멤버 대신 역할에 권한을 걸어야 방 개설 이후 참가자도 자동으로 입장할 수 있다.
+        temp_role = await ensure_temp_role(interaction.guild, recruit)
+        if temp_role:
+            overwrites[temp_role] = discord.PermissionOverwrite(connect=True)
+        else:
+            # 역할 생성 실패 시 폴백: 현재 참가자에게 개별 권한 부여
+            user_ids = await db.list_participants(self.recruit_id)
+            for uid in user_ids:
+                member = interaction.guild.get_member(uid)
+                if member:
+                    overwrites[member] = discord.PermissionOverwrite(connect=True)
         # 관전자 역할에 입장 권한 → 관전 모드인 사람은 누구나 이 파티 음성방에 입장 가능
         srole = await ensure_spectator_role(interaction.guild)
         if srole:
