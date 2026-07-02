@@ -325,14 +325,17 @@ async def enter_spectator_mode_flow(bot, guild, member) -> tuple[bool, str]:
         await db.enter_spectator_mode(guild.id, member.id, base)
 
         nick_note = ""
-        if nick_util.can_edit_nick(member):
-            ok, _ = await nick_util.set_nick(
+        block_reason = nick_util.nick_edit_block_reason(member)
+        if block_reason is not None:
+            nick_note = f" (닉네임 표시는 못 바꿨어요: {block_reason})"
+            log.warning(f"관전 모드 닉네임 변경 불가 — {member} ({member.id}): {block_reason}")
+        else:
+            ok, err = await nick_util.set_nick(
                 member, nick_util.with_prefix(base, member), reason="관전 모드"
             )
             if not ok:
-                nick_note = " (닉네임 표시는 못 바꿨어요)"
-        else:
-            nick_note = " (닉네임 표시는 못 바꿨어요)"
+                nick_note = f" (닉네임 표시는 못 바꿨어요: {err})"
+                log.warning(f"관전 모드 닉네임 변경 실패 — {member} ({member.id}): {err}")
 
         msg = "👀 관전 모드를 켰어요! 이제 아무 파티 음성방이나 들어가서 관전할 수 있어요." + nick_note
         if notes:
@@ -390,7 +393,7 @@ def build_spectator_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="👀 관전 모드",
         description=(
-            "**[관전 모드 켜기]** 를 누르면 닉네임 앞에 '관전'이 붙고, "
+            "**[관전 모드 켜기]** 를 누르면 닉네임 앞에 '【👀관전】' 태그가 붙고, "
             "**아무 파티 음성방이나 자유롭게 들어가서 관전**할 수 있어요 (정원 상관없이). "
             "파티마다 따로 신청할 필요 없어요.\n\n"
             "• 파티에 참가 중이었다면 자동으로 빠져요 (모집자라면 다른 참가자에게 자동 위임).\n"
