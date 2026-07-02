@@ -1,19 +1,19 @@
 """
 닉네임 변경 공용 헬퍼 — 단일 진실원본(single source of truth).
 
-관전 기능('관전 ' 접두사)과 셀프 닉네임 변경이 모두 이 모듈을 통해 닉을 바꾼다.
+관전 기능(SPECTATOR_PREFIX 접두사)과 셀프 닉네임 변경이 모두 이 모듈을 통해 닉을 바꾼다.
 접두사 부착/제거, 32자 제한, 안전한 member.edit 호출을 한 곳에서 책임진다.
 (DB 의존 없음 — 순수 헬퍼라 순환 import 위험이 없다.)
 """
 
 import discord
 
-SPECTATOR_PREFIX = "관전 "
+SPECTATOR_PREFIX = "【👀관전】"
 NICK_MAX = 32  # Discord 닉네임 최대 길이
 
 
 def strip_prefix(name: str | None) -> str | None:
-    """'관전 ' 접두사를 제거한다. 접두사가 없으면 그대로 반환."""
+    """SPECTATOR_PREFIX 접두사를 제거한다. 접두사가 없으면 그대로 반환."""
     if name and name.startswith(SPECTATOR_PREFIX):
         return name[len(SPECTATOR_PREFIX):]
     return name
@@ -30,15 +30,22 @@ def with_prefix(base: str | None, member: discord.Member) -> str:
     return (SPECTATOR_PREFIX + raw)[:NICK_MAX]
 
 
-def can_edit_nick(member: discord.Member) -> bool:
-    """봇이 이 멤버의 닉을 바꿀 수 있는지 (owner 불가, 권한·역할 위치 확인)."""
+def nick_edit_block_reason(member: discord.Member) -> str | None:
+    """봇이 이 멤버의 닉을 못 바꾸는 이유(한국어 설명)를 반환. 바꿀 수 있으면 None."""
     guild = member.guild
     if member.id == guild.owner_id:
-        return False
+        return "서버 주인의 닉네임은 디스코드 정책상 봇이 바꿀 수 없어요."
     me = guild.me
     if not me.guild_permissions.manage_nicknames:
-        return False
-    return me.top_role > member.top_role
+        return "봇에 '별명 관리(Manage Nicknames)' 권한이 없어요."
+    if not (me.top_role > member.top_role):
+        return "회원님 역할이 봇 역할보다 높거나 같아서 닉네임을 못 바꿔요. 서버 관리자에게 봇 역할을 더 위로 옮겨달라고 요청해주세요."
+    return None
+
+
+def can_edit_nick(member: discord.Member) -> bool:
+    """봇이 이 멤버의 닉을 바꿀 수 있는지 (owner 불가, 권한·역할 위치 확인)."""
+    return nick_edit_block_reason(member) is None
 
 
 async def set_nick(member: discord.Member, nick: str | None, *, reason: str) -> tuple[bool, str | None]:
