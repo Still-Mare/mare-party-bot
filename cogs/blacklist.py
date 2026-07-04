@@ -17,6 +17,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
 
@@ -90,10 +91,6 @@ def build_blacklist_embed(guild, rows: list) -> discord.Embed:
     return embed
 
 
-def _is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.manage_guild
-
-
 # ───────── 블랙리스트 추가 모달 ─────────
 class BlacklistAddModal(ui.Modal, title="블랙리스트 추가"):
     user_id_input = ui.TextInput(
@@ -115,8 +112,7 @@ class BlacklistAddModal(ui.Modal, title="블랙리스트 추가"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         uid = parse_user_id(str(self.user_id_input))
         if uid is None:
@@ -191,8 +187,7 @@ class BlacklistRemoveSelect(ui.Select):
         super().__init__(placeholder="해제할 유저 선택", options=options)
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         uid = int(self.values[0])
@@ -226,15 +221,13 @@ class BlacklistManageView(ui.View):
 
     @ui.button(label="ID로 추가", emoji="➕", style=discord.ButtonStyle.danger, row=0)
     async def add(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_modal(BlacklistAddModal())
 
     @ui.button(label="목록·해제", emoji="📋", style=discord.ButtonStyle.secondary, row=0)
     async def list_remove(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         rows = await db.list_blacklist(interaction.guild.id, limit=25)
@@ -244,8 +237,7 @@ class BlacklistManageView(ui.View):
 
     @ui.button(label="차단 모드 전환 (강퇴/밴)", emoji="🔁", style=discord.ButtonStyle.secondary, row=1)
     async def toggle_mode(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         settings = await db.get_settings(interaction.guild.id)
         new_val = not bool(settings.get("blacklist_ban_on_join"))
@@ -257,8 +249,7 @@ class BlacklistManageView(ui.View):
 
     @ui.button(label="차단 안내 DM 켜기/끄기", emoji="✉️", style=discord.ButtonStyle.secondary, row=1)
     async def toggle_notify(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         settings = await db.get_settings(interaction.guild.id)
         new_val = not bool(settings.get("blacklist_notify"))

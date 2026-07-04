@@ -14,6 +14,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs.checks import ensure_manage_guild
 
 
 def _parse_date_korean(text: str) -> date | None:
@@ -200,10 +201,7 @@ class LeaveActionSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "관리자만 사용할 수 있어요.", ephemeral=True
-            )
+        if not await ensure_manage_guild(interaction):
             return
 
         await interaction.response.defer(ephemeral=True)

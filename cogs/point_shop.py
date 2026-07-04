@@ -13,7 +13,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
-from cogs.control_panel import can_manage_panel
+from cogs.checks import can_manage_panel, ensure_manage_guild, ensure_manage_roles
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -102,8 +102,7 @@ class ShopAdminPanelView(ui.View):
         row=0,
     )
     async def set_pph(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_modal(SetPointsPer10MinModal())
 
@@ -115,8 +114,7 @@ class ShopAdminPanelView(ui.View):
         row=0,
     )
     async def add_role(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_roles(interaction):
             return
         await interaction.response.send_message(
             "상점에 추가할 역할을 선택하세요.",
@@ -132,8 +130,7 @@ class ShopAdminPanelView(ui.View):
         row=0,
     )
     async def del_role(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_roles(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         items = await db.list_shop_roles(interaction.guild.id)
@@ -154,8 +151,7 @@ class ShopAdminPanelView(ui.View):
         row=1,
     )
     async def list_items(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_roles(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         items       = await db.list_shop_roles(interaction.guild.id)
@@ -208,8 +204,7 @@ class ShopAdminPanelView(ui.View):
         row=1,
     )
     async def set_afk_channel(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
 
@@ -557,10 +552,7 @@ class PointShop(commands.Cog):
         description="포인트 상점 관리자 패널을 이 채널에 설치합니다 (관리자 전용)",
     )
     async def setup_shop_admin_panel(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "이 명령어는 서버 관리자만 사용할 수 있어요.", ephemeral=True
-            )
+        if not await ensure_manage_guild(interaction, "이 명령어는 서버 관리자만 사용할 수 있어요."):
             return
 
         perms = interaction.channel.permissions_for(interaction.guild.me)

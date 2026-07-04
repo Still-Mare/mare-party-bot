@@ -17,6 +17,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
 
@@ -33,10 +34,6 @@ def build_sticky_embed(sticky: dict) -> discord.Embed:
         embed.set_image(url=sticky["image_url"])
     embed.set_footer(text="📌 고정 공지")
     return embed
-
-
-def _is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.manage_guild
 
 
 def _missing_perms(channel, me) -> list:
@@ -71,8 +68,7 @@ class StickyModal(ui.Modal, title="스티키 공지 설정"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         channel = interaction.guild.get_channel(self.channel_id)
         if not isinstance(channel, discord.TextChannel):
@@ -141,8 +137,7 @@ class StickySetChannelSelect(ui.ChannelSelect):
         super().__init__(placeholder="스티키를 둘 채널 선택", channel_types=[discord.ChannelType.text])
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         # 컴포넌트 상호작용 → 모달 응답
         await interaction.response.send_modal(StickyModal(self.values[0].id))
@@ -159,8 +154,7 @@ class StickyDisableChannelSelect(ui.ChannelSelect):
         super().__init__(placeholder="스티키를 끌 채널 선택", channel_types=[discord.ChannelType.text])
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         channel = self.values[0]
@@ -197,8 +191,7 @@ class StickyManageView(ui.View):
 
     @ui.button(label="스티키 설정/수정", emoji="📌", style=discord.ButtonStyle.success, row=0)
     async def set_sticky(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "스티키 공지를 둘 채널을 선택하세요.", view=StickySetChannelView(), ephemeral=True
@@ -206,8 +199,7 @@ class StickyManageView(ui.View):
 
     @ui.button(label="스티키 끄기", emoji="🗑️", style=discord.ButtonStyle.danger, row=0)
     async def disable_sticky(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "스티키를 끌 채널을 선택하세요.", view=StickyDisableChannelView(), ephemeral=True

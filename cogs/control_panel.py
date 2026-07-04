@@ -9,6 +9,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
+from cogs.checks import can_manage_panel, ensure_manage_guild, ensure_manage_roles
 from cogs.game_roles import (
     AddGameModal, RemoveGameView, RolePanelView, CustomEmojiAddView,
 )
@@ -132,8 +133,7 @@ class AdminPanelView(ui.View):
     @ui.button(label="게임 추가", emoji="➕",
                style=discord.ButtonStyle.success, custom_id="admin:addgame", row=0)
     async def add_game(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_roles(interaction):
             return
 
         emojis = interaction.guild.emojis
@@ -155,8 +155,7 @@ class AdminPanelView(ui.View):
     @ui.button(label="게임 삭제", emoji="🗑️",
                style=discord.ButtonStyle.danger, custom_id="admin:delgame", row=0)
     async def del_game(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_roles(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         games = await db.list_games(interaction.guild.id)
@@ -170,8 +169,7 @@ class AdminPanelView(ui.View):
     @ui.button(label="지금 활동검토 실행", emoji="▶️",
                style=discord.ButtonStyle.primary, custom_id="admin:runreview", row=4)
     async def run_review_now(self, interaction: discord.Interaction, button: ui.Button):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         settings = await db.get_settings(interaction.guild.id)
@@ -238,8 +236,7 @@ class ChannelSettingSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         value = self.values[0]
         if value == "set_category":
@@ -331,8 +328,7 @@ class RoleStatsSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         value = self.values[0]
         if value == "set_panel_role":
@@ -399,8 +395,7 @@ class ActivityReviewSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         value = self.values[0]
         if value == "review_settings":
@@ -655,17 +650,6 @@ class MinTimeModal(ui.Modal, title="활동 기준 시간 설정"):
         await interaction.response.send_message(
             f"활동 기준을 주당 {h}시간으로 설정했어요.", ephemeral=True
         )
-
-
-async def can_manage_panel(interaction: discord.Interaction) -> bool:
-    """서버 관리자이거나, 지정된 패널 관리 역할 보유자면 True."""
-    if interaction.user.guild_permissions.manage_guild:
-        return True
-    settings = await db.get_settings(interaction.guild.id)
-    role_id = settings.get("panel_manager_role")
-    if role_id and any(r.id == role_id for r in interaction.user.roles):
-        return True
-    return False
 
 
 def build_recruit_panel_embed() -> discord.Embed:

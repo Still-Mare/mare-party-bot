@@ -10,6 +10,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
+from cogs.checks import ensure_manage_guild
 
 
 class VerifyView(ui.View):
@@ -149,10 +150,7 @@ class Verification(commands.Cog):
     @app_commands.command(name="인증패널", description="이 채널에 규칙 인증 버튼을 설치합니다 (관리자)")
     @app_commands.describe(안내문="인증 버튼 위에 표시할 안내 문구 (선택)")
     async def setup_verify(self, interaction: discord.Interaction, 안내문: str = None):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message(
-                "서버 관리자만 사용할 수 있어요.", ephemeral=True
-            )
+        if not await ensure_manage_guild(interaction, "서버 관리자만 사용할 수 있어요."):
             return
 
         # DB 조회 전 defer — 3초 타임아웃 방지
