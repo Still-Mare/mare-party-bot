@@ -16,6 +16,7 @@ from discord import ui
 
 import database as db
 from cogs import nick_util
+from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
 
@@ -163,8 +164,7 @@ class NickHistoryUserSelect(ui.UserSelect):
         super().__init__(placeholder="이력을 볼 유저 선택", min_values=1, max_values=1)
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         target = self.values[0]
@@ -187,8 +187,7 @@ class NickLogChannelSelect(ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_guild:
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         channel = self.values[0]
         await db.set_nickname_log_channel(interaction.guild.id, channel.id)

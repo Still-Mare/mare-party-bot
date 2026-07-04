@@ -15,6 +15,7 @@ from discord import ui
 
 import database as db
 from cogs import nick_util
+from cogs.checks import can_manage_panel
 
 log = logging.getLogger("party-bot")
 
@@ -670,13 +671,7 @@ class RecruitView(ui.View):
             return
 
         # 모집자이거나 서버 관리자 / 패널 관리 역할 보유자만 마감 가능
-        settings = await db.get_settings(interaction.guild.id)
-        pmr = settings.get("panel_manager_role")
-        is_admin = (
-            interaction.user.guild_permissions.manage_guild
-            or (pmr and any(r.id == pmr for r in interaction.user.roles))
-        )
-        if interaction.user.id != recruit["host_id"] and not is_admin:
+        if interaction.user.id != recruit["host_id"] and not await can_manage_panel(interaction):
             await interaction.followup.send(
                 "모집자나 관리자만 마감할 수 있어요.", ephemeral=True
             )

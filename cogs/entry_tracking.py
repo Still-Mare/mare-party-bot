@@ -24,6 +24,7 @@ from discord import ui
 
 import database as db
 from cogs import nick_util
+from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
 
@@ -58,10 +59,6 @@ async def _fetch_invite_uses(guild) -> dict | None:
     except (discord.Forbidden, discord.HTTPException):
         return None
     return {inv.code: (inv.uses or 0) for inv in invites}
-
-
-def _is_admin(interaction: discord.Interaction) -> bool:
-    return interaction.user.guild_permissions.manage_guild
 
 
 # ───────── 뉴비 게이트 (입장 시 부여 → 게이트 통과 시 제거) ─────────
@@ -203,8 +200,7 @@ class OpenChatUrlModal(ui.Modal, title="오픈채팅 주소 설정"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         url = str(self.url_input).strip() or None
         await db.set_openchat_url(interaction.guild.id, url)
@@ -229,8 +225,7 @@ class KakaoCodeModal(ui.Modal, title="카카오 유입 코드 등록"):
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         code = parse_invite_code(str(self.code_input))
         await db.set_kakao_invite_code(interaction.guild.id, code)
@@ -250,8 +245,7 @@ class GateRoleSelect(ui.RoleSelect):
         super().__init__(placeholder="오픈채팅 인증 역할 선택")
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         role = self.values[0]
         await db.set_openchat_gate_role(interaction.guild.id, role.id)
@@ -273,8 +267,7 @@ class MarkerRoleSelect(ui.RoleSelect):
         super().__init__(placeholder="카톡 유입 표시 역할 선택")
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         role = self.values[0]
         await db.set_entry_marker_role(interaction.guild.id, role.id)
@@ -313,8 +306,7 @@ class OpenChatReviewView(ui.View):
         self.reject_btn.custom_id = f"ocreq_reject:{request_id}"
 
     async def _handle(self, interaction: discord.Interaction, approved: bool):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 처리할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction, "관리자만 처리할 수 있어요."):
             return
         await interaction.response.defer(ephemeral=True)
         user_id = await db.review_openchat_request(self.request_id, interaction.user.id, approved)
@@ -420,8 +412,7 @@ class RequestChannelSelect(ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         channel = self.values[0]
         await db.set_openchat_request_channel(interaction.guild.id, channel.id)
@@ -445,8 +436,7 @@ class NewbieGateChannelSelect(ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         channel = self.values[0].resolve() or await self.values[0].fetch()
@@ -488,22 +478,19 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="오픈채팅 주소", emoji="💬", style=discord.ButtonStyle.primary, row=0)
     async def set_url(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_modal(OpenChatUrlModal())
 
     @ui.button(label="카카오 유입 코드", emoji="🟡", style=discord.ButtonStyle.secondary, row=0)
     async def set_kakao(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_modal(KakaoCodeModal())
 
     @ui.button(label="오픈채팅 인증 역할", emoji="🔓", style=discord.ButtonStyle.secondary, row=1)
     async def set_gate_role(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "`[오픈채팅 입장하기]` 버튼을 통과한 사람에게 자동으로 줄 역할을 선택하세요. (선택)",
@@ -512,8 +499,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="카톡 유입 표시 역할", emoji="🏷️", style=discord.ButtonStyle.secondary, row=1)
     async def set_marker_role(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "'카카오 유입 코드'로 들어온 사람에게 자동으로 줄 역할을 선택하세요. (선택)",
@@ -522,8 +508,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="유입 통계", emoji="📊", style=discord.ButtonStyle.success, row=2)
     async def stats(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         stats = await db.get_route_stats(interaction.guild.id)
@@ -558,8 +543,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="운영자 승인제 켜기/끄기", emoji="🛂", style=discord.ButtonStyle.danger, row=3)
     async def toggle_approval(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         settings = await db.get_settings(interaction.guild.id)
         new_val = not bool(settings.get("openchat_approval_required"))
@@ -581,8 +565,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="신청 받을 채널", emoji="📨", style=discord.ButtonStyle.secondary, row=3)
     async def set_request_channel(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "오픈채팅 입장 신청이 올라올 운영자 채널을 선택하세요. (승인제를 켰을 때 여기로 신청이 와요)",
@@ -591,8 +574,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="뉴비 게이트 켜기/끄기", emoji="🐣", style=discord.ButtonStyle.danger, row=4)
     async def toggle_newbie_gate(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         settings = await db.get_settings(interaction.guild.id)
@@ -615,8 +597,7 @@ class EntrySettingsView(ui.View):
 
     @ui.button(label="권한받기 채널 지정", emoji="🚪", style=discord.ButtonStyle.secondary, row=4)
     async def set_newbie_channel(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "뉴비에게만 보일 '권한받기' 채널(인증/오픈채팅 버튼이 있는 채널)을 선택하세요.\n"
@@ -700,8 +681,7 @@ class EntryLogChannelSelect(ui.ChannelSelect):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         channel = self.values[0]
         await db.set_entry_log_channel(interaction.guild.id, channel.id)
@@ -726,8 +706,7 @@ class EntryLogSearchModal(ui.Modal, title="출입로그 — 별명으로 검색"
     )
 
     async def on_submit(self, interaction: discord.Interaction):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         q = str(self.query).strip()
@@ -745,8 +724,7 @@ class EntryLogView(ui.View):
 
     @ui.button(label="최근 출입", emoji="🔄", style=discord.ButtonStyle.secondary, row=0)
     async def recent(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.defer(ephemeral=True)
         rows = await db.get_entry_log(interaction.guild.id, limit=15)
@@ -757,15 +735,13 @@ class EntryLogView(ui.View):
 
     @ui.button(label="별명으로 검색", emoji="🔍", style=discord.ButtonStyle.primary, row=0)
     async def search(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_modal(EntryLogSearchModal())
 
     @ui.button(label="로그 채널 지정", emoji="📺", style=discord.ButtonStyle.secondary, row=1)
     async def set_channel(self, interaction: discord.Interaction, button: ui.Button):
-        if not _is_admin(interaction):
-            await interaction.response.send_message("관리자만 사용할 수 있어요.", ephemeral=True)
+        if not await ensure_manage_guild(interaction):
             return
         await interaction.response.send_message(
             "입장/퇴장이 실시간으로 올라올 채널을 선택하세요. (선택 — 안 정해도 패널 조회는 돼요)",

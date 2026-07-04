@@ -24,6 +24,7 @@ from discord.ext import commands, tasks
 from discord import ui
 
 import database as db
+from cogs.checks import ensure_kick_members
 from cogs.voice_stats import fmt_duration
 
 log = logging.getLogger("party-bot")
@@ -230,10 +231,9 @@ class KickSelect(ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.kick_members:
-            await interaction.response.send_message(
-                "멤버 강퇴 권한이 있는 관리자만 사용할 수 있어요.", ephemeral=True
-            )
+        if not await ensure_kick_members(
+            interaction, "멤버 강퇴 권한이 있는 관리자만 사용할 수 있어요."
+        ):
             return
 
         kicked, failed = [], []
