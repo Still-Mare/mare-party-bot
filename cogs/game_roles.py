@@ -9,6 +9,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 
 
 def _is_valid_emoji(s: str | None) -> bool:
@@ -294,7 +295,7 @@ async def refresh_role_panel(interaction: discord.Interaction):
         title="🎮 게임 역할 선택",
         description="아래 버튼을 눌러 게임 역할을 받거나 뺄 수 있어요.\n"
                     "역할을 받으면 해당 게임 모집글에 알림이 가요.",
-        color=0x5865F2,
+        color=palette.INFO,
     )
     # 채널에 새 패널 전송 (followup)
     await interaction.followup.send(embed=embed, view=view)

@@ -14,6 +14,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 
 
 class SuggestionModal(ui.Modal, title="익명 건의 작성"):
@@ -53,7 +54,7 @@ class SuggestionModal(ui.Modal, title="익명 건의 작성"):
         embed = discord.Embed(
             title="📨 새 익명 건의",
             description=text,
-            color=0x5865F2,
+            color=palette.INFO,
         )
         embed.set_footer(text=f"건의 #{suggestion_id} · 서버 주인만 작성자를 확인할 수 있어요")
 

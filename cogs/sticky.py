@@ -17,6 +17,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
@@ -28,7 +29,7 @@ def build_sticky_embed(sticky: dict) -> discord.Embed:
     embed = discord.Embed(
         title=sticky.get("title") or None,
         description=sticky["content"],
-        color=0x5865F2,
+        color=palette.INFO,
     )
     if sticky.get("image_url"):
         embed.set_image(url=sticky["image_url"])

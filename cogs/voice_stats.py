@@ -11,6 +11,7 @@ import discord
 from discord.ext import commands
 
 import database as db
+from cogs import palette
 
 log = logging.getLogger("party-bot")
 
@@ -136,7 +137,7 @@ class VoiceStats(commands.Cog):
 
 async def build_my_stats_embed(guild_id: int, member) -> discord.Embed:
     stats = await db.get_voice_total(guild_id, member.id)
-    embed = discord.Embed(title="🔊 내 음성 이용시간", color=0xD85A30)
+    embed = discord.Embed(title="🔊 내 음성 이용시간", color=palette.INFO)
     embed.add_field(name="이번 주", value=fmt_duration(stats["week"]), inline=True)
     embed.add_field(name="전체 누적", value=fmt_duration(stats["total"]), inline=True)
     embed.set_footer(text=member.display_name)
@@ -146,7 +147,7 @@ async def build_my_stats_embed(guild_id: int, member) -> discord.Embed:
 async def build_ranking_embed(bot, guild, period: str = "week") -> discord.Embed:
     rows = await db.voice_ranking(guild.id, period, limit=10)
     label = "이번 주" if period == "week" else "전체"
-    embed = discord.Embed(title=f"📊 음성 랭킹 ({label})", color=0xD85A30)
+    embed = discord.Embed(title=f"📊 음성 랭킹 ({label})", color=palette.INFO)
     if not rows:
         embed.description = "아직 기록이 없어요."
         return embed

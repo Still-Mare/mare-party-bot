@@ -24,6 +24,7 @@ from discord.ext import commands, tasks
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs.checks import ensure_kick_members
 from cogs.voice_stats import fmt_duration
 
@@ -168,7 +169,7 @@ async def _send_final_dm(member, guild, secs, min_seconds, settings):
 def build_review_embed(result: dict, guild) -> discord.Embed:
     embed = discord.Embed(
         title="📋 주간 활동 검토 결과",
-        color=0xBA7517,
+        color=palette.WARNING,
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="✅ 통과", value=f"{result['passed']}명", inline=True)

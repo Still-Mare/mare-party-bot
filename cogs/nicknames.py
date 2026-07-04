@@ -16,6 +16,7 @@ from discord import ui
 
 import database as db
 from cogs import nick_util
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
@@ -99,7 +100,7 @@ class NicknameModal(ui.Modal, title="닉네임 변경"):
         if log_ch_id:
             ch = guild.get_channel(log_ch_id)
             if ch:
-                embed = discord.Embed(title="✏️ 닉네임 변경", color=0x5865F2)
+                embed = discord.Embed(title="✏️ 닉네임 변경", color=palette.INFO)
                 embed.add_field(name="유저", value=f"{member.mention} (`{member.id}`)", inline=False)
                 embed.add_field(name="이전", value=old_base or "_(없음)_", inline=True)
                 embed.add_field(name="이후", value=new_base or "_(원래 이름)_", inline=True)
@@ -132,7 +133,7 @@ def build_nickname_panel_embed() -> discord.Embed:
             "비워서 보내면 원래 이름으로 초기화돼요.\n"
             f"(어뷰징 방지를 위해 {_NICK_COOLDOWN_SECS}초에 한 번만 바꿀 수 있어요.)"
         ),
-        color=0x5865F2,
+        color=palette.INFO,
     )
     embed.set_footer(text="변경 내역은 운영진이 확인할 수 있어요.")
     return embed
@@ -142,7 +143,7 @@ def build_nickname_panel_embed() -> discord.Embed:
 def build_nick_history_embed(guild, target: discord.Member, rows: list) -> discord.Embed:
     embed = discord.Embed(
         title=f"✏️ 닉네임 변경 이력 — {target.display_name}",
-        color=0x5865F2,
+        color=palette.INFO,
     )
     if not rows:
         embed.description = "기록이 없어요."
