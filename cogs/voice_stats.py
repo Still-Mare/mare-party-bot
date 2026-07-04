@@ -45,12 +45,13 @@ class VoiceStats(commands.Cog):
         for guild in self.bot.guilds:
             afk_id      = guild.afk_channel.id if guild.afk_channel else None
             excluded_id = await db.get_points_excluded_channel(guild.id)
+            member_ids = set()
             for vc in guild.voice_channels:
                 if (afk_id and vc.id == afk_id) or (excluded_id and vc.id == excluded_id):
                     continue  # 잠수채널은 세션 시작 안 함
-                for member in vc.members:
-                    if not member.bot:
-                        await db.voice_join(guild.id, member.id)
+                member_ids.update(m.id for m in vc.members if not m.bot)
+            # 멤버당 개별 INSERT 대신 길드당 단일 벌크 INSERT
+            await db.voice_join_bulk(guild.id, list(member_ids))
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
