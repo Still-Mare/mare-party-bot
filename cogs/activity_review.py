@@ -90,7 +90,11 @@ async def run_review(bot, guild: discord.Guild) -> dict:
     strike_map = await db.add_strikes_bulk(guild.id, [m.id for m, _ in failed_members])
 
     for member, secs in failed_members:
-        strikes = strike_map.get(member.id, 1)
+        strikes = strike_map.get(member.id)
+        if strikes is None:
+            # add_strikes_bulk의 RETURNING에 누락된 경우 — 정상적으론 발생하지 않음
+            log.warning(f"strike 벌크 결과에 user={member.id} 누락, 1회로 간주")
+            strikes = 1
         if strikes >= STRIKE_KICK_THRESHOLD:
             # STRIKE_KICK_THRESHOLD 회째: 강퇴 후보 + 최종 안내 DM
             kick_candidates.append((member, secs, strikes))

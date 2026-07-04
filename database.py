@@ -311,7 +311,8 @@ async def voice_leave(guild_id, user_id):
     동시 호출 시 두 번째는 row가 없으므로 이중 누적이 발생하지 않는다.
     퇴장 시 음성 시간에 비례한 포인트를 같은 트랜잭션에서 적립한다.
     """
-    # 커넥션 점유 전에 조회 (캐시 히트 시 DB 왕복 없음, 풀 이중 점유 방지)
+    # 커넥션 acquire 전에 조회 — 캐시 히트 시 DB 왕복이 없어지고,
+    # 커넥션을 쥔 채 get_settings(내부 acquire)를 부르는 이중 점유를 피한다.
     p10m = (await get_settings(guild_id))["points_per_10min"]
     async with _get_pool().acquire() as con:
         async with con.transaction():
@@ -437,6 +438,11 @@ async def get_settings(guild_id):
 
     _settings_cache[guild_id] = settings
     return dict(settings)
+
+
+def evict_settings_cache(guild_id):
+    """길드 설정 캐시 제거 (봇이 길드에서 나갈 때 등)."""
+    _settings_cache.pop(guild_id, None)
 
 
 async def _upsert_setting(guild_id, column, value):

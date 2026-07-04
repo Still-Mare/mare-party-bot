@@ -130,6 +130,11 @@ class PartyBot(commands.Bot):
         except Exception:
             log.exception(f"새 서버 '{guild.name}' 명령어 동기화 실패")
 
+    async def on_guild_remove(self, guild: discord.Guild):
+        """서버에서 나가면 그 길드의 설정 캐시를 정리한다."""
+        db.evict_settings_cache(guild.id)
+        log.info(f"서버 퇴장: {guild.name} (ID: {guild.id}) — 설정 캐시 정리")
+
     async def close(self):
         """봇 종료 시 DB 커넥션 풀을 정리한다."""
         await db.close_db()
