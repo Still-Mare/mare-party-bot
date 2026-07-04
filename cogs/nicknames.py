@@ -15,8 +15,8 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
-from cogs import palette
 from cogs import nick_util
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
