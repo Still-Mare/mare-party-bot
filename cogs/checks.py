@@ -17,11 +17,6 @@ import database as db
 PERM_DENIED_MSG = "관리자만 사용할 수 있어요."
 
 
-def is_admin(interaction: discord.Interaction) -> bool:
-    """서버 관리 권한(manage_guild) 보유 여부. 응답 없이 판정만 할 때 사용."""
-    return interaction.user.guild_permissions.manage_guild
-
-
 async def _ensure_perm(interaction: discord.Interaction, perm: str, msg: str) -> bool:
     if getattr(interaction.user.guild_permissions, perm):
         return True
