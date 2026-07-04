@@ -40,6 +40,12 @@ _ALLOWED_SETTINGS_COLUMNS = frozenset({
 # ─── 모집별 참가 직렬화 잠금 (단일 프로세스 내 레이스 컨디션 방지) ───
 _join_locks: dict[int, asyncio.Lock] = {}
 
+# ─── 길드 설정 인프로세스 캐시 ─────────────────────────────────────
+# 설정은 관리자 조작 시에만 바뀌므로 캐시하고, _upsert_setting에서 무효화한다.
+# 단일 프로세스 전제(봇 구조상 _join_locks와 동일한 가정). 봇 외부(예: DB 콘솔)에서
+# guild_settings를 직접 수정하면 재시작 전까지 반영되지 않는다.
+_settings_cache: dict[int, dict] = {}
+
 # ─── 포인트 적립 최소 세션 시간 (초) ───────────────────────────────
 # 이 시간 미만 체류 시 포인트 미지급 — 빠른 입퇴장 어뷰징 방지
 _MIN_POINT_SESSION_SECS = 300  # 5분
@@ -286,12 +292,27 @@ async def voice_join(guild_id, user_id):
         )
 
 
+async def voice_join_bulk(guild_id, user_ids: list[int]):
+    """봇 재시작 복구용: 여러 유저의 세션 시작을 단일 쿼리로 기록한다."""
+    if not user_ids:
+        return
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            """INSERT INTO voice_sessions (guild_id, user_id, joined_at)
+               SELECT $1, uid, $3 FROM unnest($2::bigint[]) AS uid
+               ON CONFLICT (guild_id, user_id) DO UPDATE SET joined_at = $3""",
+            guild_id, user_ids, _now(),
+        )
+
+
 async def voice_leave(guild_id, user_id):
     """
     DELETE RETURNING으로 원자적 퇴장 처리.
     동시 호출 시 두 번째는 row가 없으므로 이중 누적이 발생하지 않는다.
     퇴장 시 음성 시간에 비례한 포인트를 같은 트랜잭션에서 적립한다.
     """
+    # 커넥션 점유 전에 조회 (캐시 히트 시 DB 왕복 없음, 풀 이중 점유 방지)
+    p10m = (await get_settings(guild_id))["points_per_10min"]
     async with _get_pool().acquire() as con:
         async with con.transaction():
             row = await con.fetchrow(
@@ -312,11 +333,6 @@ async def voice_leave(guild_id, user_id):
                 guild_id, user_id, elapsed,
             )
             # 포인트 적립 (10분당 포인트 비율 × 경과 시간)
-            settings_row = await con.fetchrow(
-                "SELECT points_per_10min FROM guild_settings WHERE guild_id = $1",
-                guild_id,
-            )
-            p10m = settings_row["points_per_10min"] if settings_row else 2
             if p10m > 0 and elapsed >= _MIN_POINT_SESSION_SECS:
                 points_earned = int(elapsed * p10m / 600)
                 if points_earned > 0:
@@ -336,6 +352,16 @@ async def get_voice_total(guild_id, user_id):
             guild_id, user_id,
         )
     return {"total": r["total_seconds"], "week": r["week_seconds"]} if r else {"total": 0, "week": 0}
+
+
+async def get_week_seconds_map(guild_id) -> dict[int, int]:
+    """길드 전체의 {user_id: week_seconds}. 주간 활동 검토의 N+1 방지용."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            "SELECT user_id, week_seconds FROM voice_totals WHERE guild_id = $1",
+            guild_id,
+        )
+    return {r["user_id"]: r["week_seconds"] for r in rows}
 
 
 async def voice_ranking(guild_id, period="week", limit=10):
@@ -358,12 +384,38 @@ async def reset_week(guild_id):
 
 
 # ─────────────────────── 길드 설정 ───────────────────────
+_SETTINGS_DEFAULTS = {
+    "voice_category_id": None, "archive_channel_id": None,
+    "review_log_channel": None, "exempt_role_id": None,
+    "min_seconds": 10800, "auto_kick_enabled": 0,
+    "panel_manager_role": None, "verified_role_id": None,
+    "recruit_post_channel_id": None,
+    "points_per_10min": 2,
+    "points_excluded_channel_id": None,
+    "nickname_log_channel_id": None,
+    "blacklist_ban_on_join": 0, "blacklist_notify": 1,
+    "openchat_url": None, "openchat_gate_role_id": None,
+    "kakao_invite_code": None, "entry_marker_role_id": None,
+    "openchat_approval_required": 0, "openchat_request_channel_id": None,
+    "spectator_role_id": None,
+    "entry_log_channel_id": None,
+    "newbie_role_id": None, "newbie_gate_enabled": 0,
+    "newbie_gate_channel_id": None,
+}
+
+
 async def get_settings(guild_id):
+    """길드 설정 조회. 캐시 우선 — DB 조회는 캐시 미스 시 1회만 발생한다."""
+    cached = _settings_cache.get(guild_id)
+    if cached is not None:
+        return dict(cached)  # 호출부 변조로부터 캐시 보호
+
     async with _get_pool().acquire() as con:
         r = await con.fetchrow(
             """SELECT voice_category_id, archive_channel_id, review_log_channel,
                       exempt_role_id, min_seconds, auto_kick_enabled, panel_manager_role,
                       verified_role_id, recruit_post_channel_id,
+                      points_per_10min, points_excluded_channel_id,
                       nickname_log_channel_id,
                       blacklist_ban_on_join, blacklist_notify,
                       openchat_url, openchat_gate_role_id,
@@ -376,47 +428,15 @@ async def get_settings(guild_id):
             guild_id,
         )
     if not r:
-        return {
-            "voice_category_id": None, "archive_channel_id": None,
-            "review_log_channel": None, "exempt_role_id": None,
-            "min_seconds": 10800, "auto_kick_enabled": 0,
-            "panel_manager_role": None, "verified_role_id": None,
-            "recruit_post_channel_id": None,
-            "nickname_log_channel_id": None,
-            "blacklist_ban_on_join": 0, "blacklist_notify": 1,
-            "openchat_url": None, "openchat_gate_role_id": None,
-            "kakao_invite_code": None, "entry_marker_role_id": None,
-            "openchat_approval_required": 0, "openchat_request_channel_id": None,
-            "spectator_role_id": None,
-            "entry_log_channel_id": None,
-            "newbie_role_id": None, "newbie_gate_enabled": 0,
-            "newbie_gate_channel_id": None,
-        }
-    return {
-        "voice_category_id": r["voice_category_id"],
-        "archive_channel_id": r["archive_channel_id"],
-        "review_log_channel": r["review_log_channel"],
-        "exempt_role_id": r["exempt_role_id"],
-        "min_seconds": r["min_seconds"],
-        "auto_kick_enabled": r["auto_kick_enabled"],
-        "panel_manager_role": r["panel_manager_role"],
-        "verified_role_id": r["verified_role_id"],
-        "recruit_post_channel_id": r["recruit_post_channel_id"],
-        "nickname_log_channel_id": r["nickname_log_channel_id"],
-        "blacklist_ban_on_join": r["blacklist_ban_on_join"],
-        "blacklist_notify": r["blacklist_notify"],
-        "openchat_url": r["openchat_url"],
-        "openchat_gate_role_id": r["openchat_gate_role_id"],
-        "kakao_invite_code": r["kakao_invite_code"],
-        "entry_marker_role_id": r["entry_marker_role_id"],
-        "openchat_approval_required": r["openchat_approval_required"],
-        "openchat_request_channel_id": r["openchat_request_channel_id"],
-        "spectator_role_id": r["spectator_role_id"],
-        "entry_log_channel_id": r["entry_log_channel_id"],
-        "newbie_role_id": r["newbie_role_id"],
-        "newbie_gate_enabled": r["newbie_gate_enabled"],
-        "newbie_gate_channel_id": r["newbie_gate_channel_id"],
-    }
+        settings = dict(_SETTINGS_DEFAULTS)
+    else:
+        settings = {key: r[key] for key in _SETTINGS_DEFAULTS}
+        # NULL 컬럼은 기본값으로 보정 (기존 get_points_per_10min의 None→2 동작 보존)
+        if settings["points_per_10min"] is None:
+            settings["points_per_10min"] = _SETTINGS_DEFAULTS["points_per_10min"]
+
+    _settings_cache[guild_id] = settings
+    return dict(settings)
 
 
 async def _upsert_setting(guild_id, column, value):
@@ -429,6 +449,7 @@ async def _upsert_setting(guild_id, column, value):
                 ON CONFLICT (guild_id) DO UPDATE SET {column} = $2""",
             guild_id, value,
         )
+    _settings_cache.pop(guild_id, None)
 
 
 async def set_voice_category(guild_id, category_id):
@@ -509,6 +530,33 @@ async def reset_strike(guild_id, user_id):
         await con.execute(
             "DELETE FROM activity_warnings WHERE guild_id = $1 AND user_id = $2",
             guild_id, user_id,
+        )
+
+
+async def add_strikes_bulk(guild_id, user_ids: list[int]) -> dict[int, int]:
+    """여러 유저의 strike를 단일 쿼리로 +1. {user_id: 새 strike 수} 반환."""
+    if not user_ids:
+        return {}
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """INSERT INTO activity_warnings (guild_id, user_id, strikes, last_review)
+               SELECT $1, uid, 1, $3 FROM unnest($2::bigint[]) AS uid
+               ON CONFLICT (guild_id, user_id) DO UPDATE SET
+                 strikes = activity_warnings.strikes + 1, last_review = $3
+               RETURNING user_id, strikes""",
+            guild_id, user_ids, _now(),
+        )
+    return {r["user_id"]: r["strikes"] for r in rows}
+
+
+async def reset_strikes_bulk(guild_id, user_ids: list[int]):
+    """여러 유저의 strike를 단일 쿼리로 초기화."""
+    if not user_ids:
+        return
+    async with _get_pool().acquire() as con:
+        await con.execute(
+            "DELETE FROM activity_warnings WHERE guild_id = $1 AND user_id = ANY($2::bigint[])",
+            guild_id, user_ids,
         )
 
 
@@ -628,6 +676,18 @@ async def is_user_on_leave(guild_id, user_id):
     return r is not None
 
 
+async def list_users_on_leave(guild_id) -> set[int]:
+    """현재 잠수 신고가 승인·유효한 유저 ID 집합. 주간 활동 검토의 N+1 방지용."""
+    async with _get_pool().acquire() as con:
+        rows = await con.fetch(
+            """SELECT DISTINCT user_id FROM leave_notices
+               WHERE guild_id = $1 AND status = 'approved'
+                 AND until_date >= CURRENT_DATE""",
+            guild_id,
+        )
+    return {r["user_id"] for r in rows}
+
+
 async def expire_old_leave_notices():
     """잠수 기간이 끝난 신고를 expired로 표시. 정기적으로 호출."""
     async with _get_pool().acquire() as con:
@@ -713,12 +773,7 @@ async def remove_shop_role(guild_id: int, role_id: int):
 
 
 async def get_points_per_10min(guild_id: int) -> int:
-    async with _get_pool().acquire() as con:
-        val = await con.fetchval(
-            "SELECT points_per_10min FROM guild_settings WHERE guild_id = $1",
-            guild_id,
-        )
-    return val if val is not None else 2
+    return (await get_settings(guild_id))["points_per_10min"]
 
 
 async def set_points_per_10min(guild_id: int, p10m: int):
@@ -727,11 +782,7 @@ async def set_points_per_10min(guild_id: int, p10m: int):
 
 async def get_points_excluded_channel(guild_id: int) -> int | None:
     """포인트 미지급 채널(잠수채널) ID 반환. 미설정 시 None."""
-    async with _get_pool().acquire() as con:
-        return await con.fetchval(
-            "SELECT points_excluded_channel_id FROM guild_settings WHERE guild_id = $1",
-            guild_id,
-        )
+    return (await get_settings(guild_id))["points_excluded_channel_id"]
 
 
 async def set_points_excluded_channel(guild_id: int, channel_id: int | None):

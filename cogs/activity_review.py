@@ -62,9 +62,14 @@ async def run_review(bot, guild: discord.Guild) -> dict:
     exempt_role_id = settings["exempt_role_id"]
     now = datetime.now(timezone.utc)
 
+    # 멤버당 개별 쿼리(N+1) 대신 길드 단위 벌크 조회 3건 + 벌크 갱신 2건으로 처리
+    on_leave_ids = await db.list_users_on_leave(guild.id)
+    week_seconds_map = await db.get_week_seconds_map(guild.id)
+
     warned = []      # (member, week_seconds, strikes)
     kick_candidates = []  # (member, week_seconds, strikes)
-    passed = 0
+    passed_members = []   # 기준 충족 → strike 초기화 대상
+    failed_members = []   # (member, week_seconds) — strike +1 대상
     exempted = 0
 
     for member in guild.members:
@@ -72,24 +77,29 @@ async def run_review(bot, guild: discord.Guild) -> dict:
             exempted += 1
             continue
         # 잠수 신고가 승인된 멤버는 면제
-        if await db.is_user_on_leave(guild.id, member.id):
+        if member.id in on_leave_ids:
             exempted += 1
             continue
-        stats = await db.get_voice_total(guild.id, member.id)
-        secs = stats["week"]  # 검토 주기(1주) 동안 누적된 시간
+        secs = week_seconds_map.get(member.id, 0)  # 검토 주기(1주) 동안 누적된 시간
         if secs >= min_seconds:
-            await db.reset_strike(guild.id, member.id)
-            passed += 1
+            passed_members.append(member)
         else:
-            strikes = await db.add_strike(guild.id, member.id)
-            if strikes >= STRIKE_KICK_THRESHOLD:
-                # STRIKE_KICK_THRESHOLD 회째: 강퇴 후보 + 최종 안내 DM
-                kick_candidates.append((member, secs, strikes))
-                await _send_final_dm(member, guild, secs, min_seconds, settings)
-            else:
-                # 1·2회: 경고만
-                warned.append((member, secs, strikes))
-                await _send_warning_dm(member, guild, secs, min_seconds, strikes, settings)
+            failed_members.append((member, secs))
+
+    await db.reset_strikes_bulk(guild.id, [m.id for m in passed_members])
+    strike_map = await db.add_strikes_bulk(guild.id, [m.id for m, _ in failed_members])
+
+    for member, secs in failed_members:
+        strikes = strike_map.get(member.id, 1)
+        if strikes >= STRIKE_KICK_THRESHOLD:
+            # STRIKE_KICK_THRESHOLD 회째: 강퇴 후보 + 최종 안내 DM
+            kick_candidates.append((member, secs, strikes))
+            await _send_final_dm(member, guild, secs, min_seconds, settings)
+        else:
+            # 1·2회: 경고만
+            warned.append((member, secs, strikes))
+            await _send_warning_dm(member, guild, secs, min_seconds, strikes, settings)
+    passed = len(passed_members)
 
     return {
         "warned": warned,
