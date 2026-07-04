@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs import nick_util
 from cogs.checks import can_manage_panel
 
@@ -46,7 +47,7 @@ def build_recruit_embed(
                  None이면 participant_members 길이를 사용한다.
     """
     is_closed = recruit["status"] == "closed"
-    color = 0x4E5058 if is_closed else 0x248046
+    color = palette.NEUTRAL if is_closed else palette.SUCCESS
     title = ("🔒 [마감] " if is_closed else "📢 ") + f"{recruit['game_name']} 파티 모집"
 
     count = total_count if total_count is not None else len(participant_members)
@@ -401,7 +402,7 @@ def build_spectator_panel_embed() -> discord.Embed:
             "• 음성에서 완전히 나가면 자동으로 꺼져요.\n"
             "• **[관전 모드 끄기]** 를 누르면 닉네임이 원래대로 돌아와요."
         ),
-        color=0x5865F2,
+        color=palette.INFO,
     )
     return embed
 
@@ -754,7 +755,7 @@ async def archive_recruit_to_channel(
     # 아카이브 채널에 종료된 모집글 재게시
     if archive_channel:
         embed = build_recruit_embed(recruit, members, host, total_count=len(user_ids))
-        embed.color = 0x4E5058
+        embed.color = palette.NEUTRAL
         embed.title = "📦 [종료] " + recruit["game_name"] + " 파티"
         embed.add_field(name="종료 사유", value=reason, inline=False)
         try:

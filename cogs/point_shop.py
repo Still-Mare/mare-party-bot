@@ -13,6 +13,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
+from cogs import palette
 from cogs.checks import can_manage_panel, ensure_manage_guild, ensure_manage_roles
 
 
@@ -37,7 +38,7 @@ class ShopUserPanelView(ui.View):
         points = await db.get_user_points(interaction.guild.id, interaction.user.id)
         p10m   = await db.get_points_per_10min(interaction.guild.id)
 
-        embed = discord.Embed(title="💰 내 포인트 현황", color=0xF1C40F)
+        embed = discord.Embed(title="💰 내 포인트 현황", color=palette.GOLD)
         embed.add_field(name="현재 잔액",  value=f"**{points:,}** 포인트", inline=True)
         embed.add_field(name="적립 비율",  value=f"10분 = **{p10m}** 포인트", inline=True)
         embed.set_footer(text=f"{interaction.user.display_name} · 음성채널에 있을수록 포인트가 쌓여요")
@@ -61,7 +62,7 @@ class ShopUserPanelView(ui.View):
         points        = await db.get_user_points(interaction.guild.id, interaction.user.id)
         user_role_ids = {r.id for r in interaction.user.roles}
 
-        embed = discord.Embed(title="🛒 역할 구매", color=0x57F287)
+        embed = discord.Embed(title="🛒 역할 구매", color=palette.SUCCESS)
         embed.description = (
             f"💰 내 포인트: **{points:,}** 포인트\n\n"
             "아래 드롭다운에서 구매할 역할을 선택하세요."
@@ -159,7 +160,7 @@ class ShopAdminPanelView(ui.View):
         excluded_id = await db.get_points_excluded_channel(interaction.guild.id)
         afk_id      = interaction.guild.afk_channel.id if interaction.guild.afk_channel else None
 
-        embed = discord.Embed(title="📋 포인트 상점 현황", color=0x5865F2)
+        embed = discord.Embed(title="📋 포인트 상점 현황", color=palette.INFO)
         embed.add_field(
             name="🪙 적립 비율",
             value=f"음성 10분 = **{p10m}** 포인트  (5분 미만 세션 제외)",
@@ -309,7 +310,7 @@ class BuyRoleSelect(ui.Select):
         embed = discord.Embed(
             title="✅ 구매 완료!",
             description=f"{role.mention} 역할을 획득했어요!",
-            color=0x57F287,
+            color=palette.SUCCESS,
         )
         embed.add_field(name="사용한 포인트", value=f"{shop_item['cost']:,}", inline=True)
         embed.add_field(name="남은 포인트",   value=f"{remaining:,}",         inline=True)
@@ -486,7 +487,7 @@ def build_shop_user_panel_embed() -> discord.Embed:
             "**💰 내 포인트** — 현재 잔액과 적립 비율 확인\n"
             "**🛒 역할 구매** — 판매 중인 역할 목록 조회 및 구매"
         ),
-        color=0xF1C40F,
+        color=palette.GOLD,
     )
     embed.set_footer(text="음성채널에 있는 시간이 길수록 더 많은 포인트가 쌓여요")
     return embed
@@ -503,7 +504,7 @@ def build_shop_admin_panel_embed() -> discord.Embed:
             "**📋 현황 보기** — 현재 설정 및 등록 역할 전체 조회\n"
             "**🔇 잠수채널 설정** — 포인트가 지급되지 않을 채널 지정"
         ),
-        color=0x5865F2,
+        color=palette.INFO,
     )
     embed.set_footer(text="5분 미만 세션 포인트 미지급 · Discord AFK 채널 자동 제외")
     return embed

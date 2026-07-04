@@ -17,6 +17,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 log = logging.getLogger("party-bot")
@@ -76,7 +77,7 @@ async def enforce_blacklist_action(member: discord.Member) -> None:
 
 
 def build_blacklist_embed(guild, rows: list) -> discord.Embed:
-    embed = discord.Embed(title="🚫 블랙리스트", color=0xED4245)
+    embed = discord.Embed(title="🚫 블랙리스트", color=palette.DANGER)
     if not rows:
         embed.description = "등록된 블랙리스트가 없어요."
         return embed

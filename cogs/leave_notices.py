@@ -14,6 +14,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 
@@ -151,7 +152,7 @@ async def _submit_leave(interaction: discord.Interaction, until: date, reason):
                     f"📅 복귀 예정: **{until.isoformat()}** ({days}일 후)\n"
                     f"💬 사유: {reason or '_(미입력)_'}"
                 ),
-                color=0xBA7517,
+                color=palette.WARNING,
             )
             embed.set_footer(text=f"신고 #{notice_id} · 관리자 패널에서 승인/거절")
             try:

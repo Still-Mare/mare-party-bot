@@ -23,6 +23,7 @@ from discord.ext import commands
 from discord import ui
 
 import database as db
+from cogs import palette
 from cogs import nick_util
 from cogs.checks import ensure_manage_guild
 
@@ -133,7 +134,7 @@ def build_entry_settings_embed() -> discord.Embed:
             "누가 어느 경로로 들어왔는지 구분해요.\n"
             "아래 버튼으로 설정하세요. (⭐ = 꼭 필요 · 나머지는 선택)"
         ),
-        color=0x5865F2,
+        color=palette.INFO,
     )
     embed.add_field(
         name="⭐ 💬 오픈채팅 주소",
@@ -291,7 +292,7 @@ def build_openchat_request_embed(member) -> discord.Embed:
             f"{member.mention} (`{member.id}`) 님이 오픈채팅 입장을 신청했어요.\n"
             "**카카오톡 오픈채팅에 실제로 입장했는지 확인**한 뒤 아래 버튼으로 처리해주세요."
         ),
-        color=0xBA7517,
+        color=palette.WARNING,
     )
     embed.set_footer(text=f"신청자: {member.display_name}")
     return embed
@@ -364,7 +365,7 @@ class OpenChatReviewView(ui.View):
                 embed = build_openchat_request_embed(member)
             else:
                 embed = discord.Embed(title="💬 오픈채팅 입장 신청")
-            embed.color = 0x248046 if approved else 0xED4245
+            embed.color = palette.SUCCESS if approved else palette.DANGER
             embed.add_field(name="처리 결과", value=result, inline=False)
             await interaction.message.edit(embed=embed, view=None)
         except discord.HTTPException:
@@ -519,7 +520,7 @@ class EntrySettingsView(ui.View):
         vanity = stats.get("vanity", 0)
         me = interaction.guild.me
         track_ok = me.guild_permissions.manage_guild
-        embed = discord.Embed(title="📊 입장 경로별 인원", color=0x5865F2)
+        embed = discord.Embed(title="📊 입장 경로별 인원", color=palette.INFO)
         embed.description = (
             f"🟡 카카오 오픈채팅으로 들어옴: **{kakao}명**\n"
             f"🔷 디스코드 초대로 들어옴: **{discord_n}명**\n"
@@ -621,11 +622,11 @@ def build_entry_log_post_embed(action: str, display_name: str, route_label,
                                user_id: int) -> discord.Embed:
     """실시간 채널 게시용 — 입장/퇴장 1건."""
     if action == "join":
-        embed = discord.Embed(title="🟢 입장", color=0x248046)
+        embed = discord.Embed(title="🟢 입장", color=palette.SUCCESS)
         embed.add_field(name="별명", value=f"**{display_name}**", inline=True)
         embed.add_field(name="경로", value=_fmt_route(route_label), inline=True)
     else:
-        embed = discord.Embed(title="🔴 퇴장", color=0xED4245)
+        embed = discord.Embed(title="🔴 퇴장", color=palette.DANGER)
         embed.add_field(name="별명", value=f"**{display_name}**", inline=True)
     # 시각은 각 보는 사람의 현지시간으로 자동 표시
     embed.add_field(
@@ -647,7 +648,7 @@ def _entry_log_lines(rows: list) -> str:
 
 
 def build_entry_log_view_embed(rows: list, *, title: str, footer: str) -> discord.Embed:
-    embed = discord.Embed(title=title, color=0x5865F2)
+    embed = discord.Embed(title=title, color=palette.INFO)
     if not rows:
         embed.description = "기록이 없어요."
     else:

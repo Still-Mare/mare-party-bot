@@ -9,6 +9,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
+from cogs import palette
 from cogs.checks import can_manage_panel, ensure_manage_guild, ensure_manage_roles
 from cogs.game_roles import (
     AddGameModal, RemoveGameView, RolePanelView, CustomEmojiAddView,
@@ -52,7 +53,7 @@ class RolesPanelView(ui.View):
         embed = discord.Embed(
             title="🎮 게임 역할 선택",
             description="버튼을 눌러 역할을 받거나 뺄 수 있어요.",
-            color=0x5865F2,
+            color=palette.INFO,
         )
         await interaction.response.send_message(
             embed=embed, view=RolePanelView(games), ephemeral=True
@@ -95,7 +96,7 @@ class ActivityPanelView(ui.View):
                 "**기간을 선택**하거나 **직접 날짜를 입력**해주세요. "
                 "관리자 승인 후 적용돼요."
             ),
-            color=0xBA7517,
+            color=palette.WARNING,
         )
         await interaction.response.send_message(
             embed=embed, view=LeaveStartView(), ephemeral=True
@@ -415,7 +416,7 @@ class ActivityReviewSelect(ui.Select):
                     "신규 가입 1주 미만 멤버는 항상 자동 제외돼요.\n"
                     "아래 버튼으로 항목을 설정하세요."
                 ),
-                color=0xBA7517,
+                color=palette.WARNING,
             )
             await interaction.followup.send(
                 embed=embed, view=ReviewSettingsView(), ephemeral=True
@@ -438,7 +439,7 @@ class ActivityReviewSelect(ui.Select):
             embed = discord.Embed(
                 title="🕊️ 대기 중인 잠수 신고",
                 description="\n\n".join(lines),
-                color=0xBA7517,
+                color=palette.WARNING,
             )
             embed.set_footer(text=f"총 {len(notices)}건 · 아래 드롭다운으로 일괄 처리")
             from cogs.leave_notices import LeaveReviewView
@@ -660,7 +661,7 @@ def build_recruit_panel_embed() -> discord.Embed:
             "버튼을 누르면 게임을 선택하고 모집 정보를 입력할 수 있어요.\n"
             "모집글이 올라가면 해당 게임 역할 보유자에게 자동으로 알림이 가요."
         ),
-        color=0x248046,
+        color=palette.SUCCESS,
     )
     embed.set_footer(text="모집 완료 후 '모집 마감' 버튼을 눌러 정리해주세요.")
     return embed
@@ -673,7 +674,7 @@ def build_roles_panel_embed() -> discord.Embed:
             "관심 있는 게임의 역할을 받아 파티 모집 알림을 받아요.\n\n"
             "버튼을 누르면 역할이 토글돼요. 이미 있으면 해제, 없으면 추가됩니다."
         ),
-        color=0x5865F2,
+        color=palette.INFO,
     )
     embed.set_footer(text="역할이 있으면 해당 게임 파티 모집 시 멘션으로 알림을 받아요.")
     return embed
@@ -682,7 +683,7 @@ def build_roles_panel_embed() -> discord.Embed:
 def build_activity_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="📊 내 활동 & 커뮤니티",
-        color=0x4E5058,
+        color=palette.NEUTRAL,
     )
     embed.add_field(
         name="🔊 음성 통계",
@@ -701,7 +702,7 @@ def build_admin_panel_embed() -> discord.Embed:
     embed = discord.Embed(
         title="🛠️ 관리자 패널",
         description="서버 설정 및 운영 기능을 관리해요.",
-        color=0xED4245,
+        color=palette.DANGER,
     )
     embed.add_field(
         name="🎮 게임 관리",

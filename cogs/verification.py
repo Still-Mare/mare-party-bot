@@ -10,6 +10,7 @@ from discord.ext import commands
 from discord import ui, app_commands
 
 import database as db
+from cogs import palette
 from cogs.checks import ensure_manage_guild
 
 
@@ -185,7 +186,7 @@ class Verification(commands.Cog):
             "아래 **인증하기** 버튼을 누르면 서버 이용에 필요한 역할을 받아요.\n"
             "규칙을 잘 읽고 동의하셨다면 인증해주세요!"
         )
-        embed = discord.Embed(title="✅ 서버 인증", description=desc, color=0x248046)
+        embed = discord.Embed(title="✅ 서버 인증", description=desc, color=palette.SUCCESS)
 
         try:
             await interaction.channel.send(embed=embed, view=VerifyView())
